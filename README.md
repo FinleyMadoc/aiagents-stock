@@ -55,6 +55,8 @@ DEEPSEEK_API_KEY=your_key_here        # DeepSeek API密钥（核心AI引擎）
 
 # ===== 数据源（可选）=====
 TUSHARE_TOKEN=your_token_here          # Tushare Token（https://tushare.pro）
+YDC_API_KEY=your_ydc_api_key_here     # You.com API密钥（智策板块Research功能用）
+YDC_RESEARCH_EFFORT=standard          # Research搜索深度（lite/standard/deep/exhaustive）
 
 # ===== 通知配置（可选）=====
 SMTP_SERVER=smtp.qq.com

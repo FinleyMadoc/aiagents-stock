@@ -8,6 +8,9 @@ load_dotenv(override=True)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
+# You.com API配置
+YDC_API_KEY = os.getenv("YDC_API_KEY", "")
+
 # 默认AI模型名称（支持任何OpenAI兼容的模型）
 DEFAULT_MODEL_NAME = os.getenv("DEFAULT_MODEL_NAME", "deepseek-chat")
 

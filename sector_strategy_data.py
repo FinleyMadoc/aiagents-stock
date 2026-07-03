@@ -17,6 +17,9 @@ from sector_strategy_db import SectorStrategyDatabase
 from utils.akshare_helper import patch_requests
 patch_requests()
 
+# You.com Research API 客户端
+from utils.youchannels_research import get_youdotcom_research, format_research_for_ai
+
 # 加载环境变量
 load_dotenv()
 
@@ -76,7 +79,8 @@ class SectorStrategyDataFetcher:
             "sector_fund_flow": {},
             "market_overview": {},
             "north_flow": {},
-            "news": []
+            "news": [],
+            "youchannels_research": []
         }
         
         try:
@@ -121,7 +125,14 @@ class SectorStrategyDataFetcher:
             if news_data:
                 data["news"] = news_data
                 print(f"    ✓ 成功获取 {len(news_data)} 条新闻")
-            
+
+            # 7. You.com Research 深度研究（基于财经新闻主题）
+            print("  [7/7] You.com Research 深度研究...")
+            research_data = self._get_youchannels_research(news_data)
+            if research_data:
+                data["youchannels_research"] = research_data
+                print(f"    ✓ 成功获取 You.com 研究报告")
+
             data["success"] = True
             print("[智策] ✓ 板块数据获取完成！")
             
@@ -432,6 +443,52 @@ class SectorStrategyDataFetcher:
         except Exception as e:
             print(f"    获取财经新闻失败: {e}")
             return []
+
+    def _get_youchannels_research(self, news_data: list) -> dict | None:
+        """
+        使用 You.com Research API 对财经新闻主题进行深度研究。
+
+        基于当日财经新闻标题构建研究问题，调用 You.com Research API
+        获取带有多步推理和引用来源的深度分析报告。
+
+        Args:
+            news_data: _get_financial_news() 返回的新闻列表
+
+        Returns:
+            You.com Research API 返回的深度研究报告字典，包含 content 和 sources
+            如果未配置 YDC_API_KEY 或 API 调用失败则返回 None
+        """
+        if not news_data:
+            return None
+
+        api_key = os.getenv("YDC_API_KEY", "").strip()
+        if not api_key:
+            print("    [You.com] 未配置 YDC_API_KEY，跳过 Research")
+            return None
+
+        # 从新闻标题构建研究查询
+        top_titles = [n.get("title", "") for n in news_data[:10] if n.get("title")]
+        if not top_titles:
+            return None
+
+        # 拼接为研究问题
+        news_summary = " | ".join(top_titles[:5])
+        research_query = (
+            f"基于以下今日财经新闻标题，进行深度研究和分析：{news_summary}。"
+            f"请分析这些新闻对A股市场的影响，包括受益板块、利空板块和市场情绪。"
+        )
+
+        try:
+            result = get_youdotcom_research(research_query, effort="standard")
+            if result.get("success"):
+                return result
+            else:
+                error = result.get("error", "Unknown error")
+                print(f"    [You.com] Research 调用失败: {error}")
+                return None
+        except Exception as e:
+            print(f"    [You.com] Research 调用异常: {e}")
+            return None
     
     def format_data_for_ai(self, data):
         """
@@ -534,7 +591,12 @@ class SectorStrategyDataFetcher:
                 text_parts.append(f"{idx}. [{news['publish_time']}] {news['title']}")
                 if news.get('content') and len(news['content']) > 100:
                     text_parts.append(f"   {news['content'][:100]}...")
-        
+
+        # You.com Research 深度研究报告
+        if data.get("youchannels_research"):
+            research_formatted = format_research_for_ai(data["youchannels_research"])
+            text_parts.append(f"\n{research_formatted}\n")
+
         return "\n".join(text_parts)
     
     def _save_raw_data_to_db(self, data):
