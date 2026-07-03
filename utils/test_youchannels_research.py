@@ -1,5 +1,19 @@
 """
 测试 You.com Research API 客户端模块
+
+运行方式:
+  # 无需 API key，单元测试全部通过
+  python3 -m pytest utils/test_youchannels_research.py -v
+
+  # 包含集成测试（需要 YDC_API_KEY）
+  export YDC_API_KEY=your_key_here
+  python3 -m pytest utils/test_youchannels_research.py -v
+
+  # 仅运行集成测试（需要 YDC_API_KEY）
+  export YDC_API_KEY=your_key_here
+  python3 -m pytest utils/test_youchannels_research.py::TestGetYoudotcomResearchIntegration -v
+
+注意: 集成测试与单元测试共享同一进程，建议单独运行集成测试以避免环境状态干扰。
 """
 
 import pytest

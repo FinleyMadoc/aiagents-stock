@@ -74,6 +74,19 @@ MINIQMT_HOST=127.0.0.1
 MINIQMT_PORT=58080
 ```
 
+### 测试
+
+You.com Research 模块的测试位于 `utils/test_youchannels_research.py`。
+
+```bash
+# 单元测试（无需 API key）
+python3 -m pytest utils/test_youchannels_research.py -v
+
+# 集成测试（需要 YDC_API_KEY 环境变量）
+export YDC_API_KEY=your_key_here
+python3 -m pytest utils/test_youchannels_research.py::TestGetYoudotcomResearchIntegration -v
+```
+
 ### 当前完整数据链路
 ```
 历史K线      → 腾讯 proxy.finance.qq.com         ✅
