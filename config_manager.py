@@ -123,6 +123,25 @@ class ConfigManager:
                 "required": False,
                 "type": "text"
             },
+            "TDX_BASE_URL": {
+                "value": "http://127.0.0.1:8080",
+                "description": "通达信数据源API地址",
+                "required": False,
+                "type": "text"
+            },
+            "YDC_API_KEY": {
+                "value": "",
+                "description": "You.com Research API密钥",
+                "required": False,
+                "type": "password"
+            },
+            "YDC_RESEARCH_EFFORT": {
+                "value": "standard",
+                "description": "You.com 搜索深度 (lite/standard/deep/exhaustive)",
+                "required": False,
+                "type": "select",
+                "options": ["lite", "standard", "deep", "exhaustive"]
+            },
         }
     
     def read_env(self) -> Dict[str, str]:
@@ -167,48 +186,71 @@ class ConfigManager:
         return config
     
     def write_env(self, config: Dict[str, str]) -> bool:
-        """保存配置到.env文件"""
+        """保存配置到.env文件（保留未在界面中修改的其他自定义配置）"""
         try:
+            # 读取当前所有配置，保留界面外传入/已存在的其他自定义键
+            current_env = self.read_env()
+            full_config = {**current_env, **config}
+
             lines = []
             lines.append("# AI股票分析系统环境配置")
             lines.append("# 由系统自动生成和管理")
             lines.append("")
             
-            # DeepSeek配置
-            lines.append("# ========== DeepSeek API配置 ==========")
-            lines.append(f'DEEPSEEK_API_KEY="{config.get("DEEPSEEK_API_KEY", "")}"')
-            lines.append(f'DEEPSEEK_BASE_URL="{config.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")}"')
+            # DeepSeek / AI 模型配置
+            lines.append("# ========== AI 模型 API 配置 ==========")
+            lines.append(f'DEEPSEEK_API_KEY="{full_config.get("DEEPSEEK_API_KEY", "")}"')
+            lines.append(f'DEEPSEEK_BASE_URL="{full_config.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")}"')
+            lines.append(f'DEFAULT_MODEL_NAME="{full_config.get("DEFAULT_MODEL_NAME", "deepseek-chat")}"')
             lines.append("")
             
-            # Tushare配置
-            lines.append("# ========== Tushare数据接口（可选）==========")
-            lines.append(f'TUSHARE_TOKEN="{config.get("TUSHARE_TOKEN", "")}"')
+            # 数据接口配置
+            lines.append("# ========== 数据接口配置（可选）==========")
+            lines.append(f'TUSHARE_TOKEN="{full_config.get("TUSHARE_TOKEN", "")}"')
+            lines.append(f'TDX_BASE_URL="{full_config.get("TDX_BASE_URL", "http://127.0.0.1:8080")}"')
+            lines.append(f'YDC_API_KEY="{full_config.get("YDC_API_KEY", "")}"')
+            lines.append(f'YDC_RESEARCH_EFFORT="{full_config.get("YDC_RESEARCH_EFFORT", "standard")}"')
             lines.append("")
             
             # MiniQMT配置
             lines.append("# ========== MiniQMT量化交易配置（可选）==========")
-            lines.append(f'MINIQMT_ENABLED="{config.get("MINIQMT_ENABLED", "false")}"')
-            lines.append(f'MINIQMT_ACCOUNT_ID="{config.get("MINIQMT_ACCOUNT_ID", "")}"')
-            lines.append(f'MINIQMT_HOST="{config.get("MINIQMT_HOST", "127.0.0.1")}"')
-            lines.append(f'MINIQMT_PORT="{config.get("MINIQMT_PORT", "58610")}"')
+            lines.append(f'MINIQMT_ENABLED="{full_config.get("MINIQMT_ENABLED", "false")}"')
+            lines.append(f'MINIQMT_ACCOUNT_ID="{full_config.get("MINIQMT_ACCOUNT_ID", "")}"')
+            lines.append(f'MINIQMT_HOST="{full_config.get("MINIQMT_HOST", "127.0.0.1")}"')
+            lines.append(f'MINIQMT_PORT="{full_config.get("MINIQMT_PORT", "58610")}"')
             lines.append("")
             
             # 邮件通知配置
             lines.append("# ========== 邮件通知配置（可选）==========")
-            lines.append(f'EMAIL_ENABLED="{config.get("EMAIL_ENABLED", "false")}"')
-            lines.append(f'SMTP_SERVER="{config.get("SMTP_SERVER", "")}"')
-            lines.append(f'SMTP_PORT="{config.get("SMTP_PORT", "587")}"')
-            lines.append(f'EMAIL_FROM="{config.get("EMAIL_FROM", "")}"')
-            lines.append(f'EMAIL_PASSWORD="{config.get("EMAIL_PASSWORD", "")}"')
-            lines.append(f'EMAIL_TO="{config.get("EMAIL_TO", "")}"')
+            lines.append(f'EMAIL_ENABLED="{full_config.get("EMAIL_ENABLED", "false")}"')
+            lines.append(f'SMTP_SERVER="{full_config.get("SMTP_SERVER", "")}"')
+            lines.append(f'SMTP_PORT="{full_config.get("SMTP_PORT", "587")}"')
+            lines.append(f'EMAIL_FROM="{full_config.get("EMAIL_FROM", "")}"')
+            lines.append(f'EMAIL_PASSWORD="{full_config.get("EMAIL_PASSWORD", "")}"')
+            lines.append(f'EMAIL_TO="{full_config.get("EMAIL_TO", "")}"')
             lines.append("")
             
             # Webhook通知配置
             lines.append("# ========== Webhook通知配置（可选）==========")
-            lines.append(f'WEBHOOK_ENABLED="{config.get("WEBHOOK_ENABLED", "false")}"')
-            lines.append(f'WEBHOOK_TYPE="{config.get("WEBHOOK_TYPE", "dingtalk")}"')
-            lines.append(f'WEBHOOK_URL="{config.get("WEBHOOK_URL", "")}"')
-            lines.append(f'WEBHOOK_KEYWORD="{config.get("WEBHOOK_KEYWORD", "aiagents通知")}"')
+            lines.append(f'WEBHOOK_ENABLED="{full_config.get("WEBHOOK_ENABLED", "false")}"')
+            lines.append(f'WEBHOOK_TYPE="{full_config.get("WEBHOOK_TYPE", "dingtalk")}"')
+            lines.append(f'WEBHOOK_URL="{full_config.get("WEBHOOK_URL", "")}"')
+            lines.append(f'WEBHOOK_KEYWORD="{full_config.get("WEBHOOK_KEYWORD", "aiagents通知")}"')
+
+            # 保留其他非标准自定义键
+            written_keys = {
+                "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEFAULT_MODEL_NAME",
+                "TUSHARE_TOKEN", "TDX_BASE_URL", "YDC_API_KEY", "YDC_RESEARCH_EFFORT",
+                "MINIQMT_ENABLED", "MINIQMT_ACCOUNT_ID", "MINIQMT_HOST", "MINIQMT_PORT",
+                "EMAIL_ENABLED", "SMTP_SERVER", "SMTP_PORT", "EMAIL_FROM", "EMAIL_PASSWORD", "EMAIL_TO",
+                "WEBHOOK_ENABLED", "WEBHOOK_TYPE", "WEBHOOK_URL", "WEBHOOK_KEYWORD"
+            }
+            custom_keys = {k: v for k, v in full_config.items() if k not in written_keys}
+            if custom_keys:
+                lines.append("")
+                lines.append("# ========== 其他自定义配置 ==========")
+                for k, v in custom_keys.items():
+                    lines.append(f'{k}="{v}"')
             
             with open(self.env_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(lines))

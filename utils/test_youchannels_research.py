@@ -152,6 +152,15 @@ class TestFormatResearchForAI:
 class TestGetYoudotcomResearchErrorPaths:
     """测试 get_youdotcom_research 错误路径（无网络调用）"""
 
+    def setup_method(self):
+        self._orig_key = os.environ.get("YDC_API_KEY")
+
+    def teardown_method(self):
+        if self._orig_key is None:
+            os.environ.pop("YDC_API_KEY", None)
+        else:
+            os.environ["YDC_API_KEY"] = self._orig_key
+
     def test_missing_api_key(self):
         os.environ.pop("YDC_API_KEY", None)
 
@@ -353,7 +362,7 @@ class TestGetYoudotcomResearchIntegration:
 
     def test_research_returns_content_and_sources(self):
         api_key = os.environ.get("YDC_API_KEY", "").strip()
-        if not api_key:
+        if not api_key or api_key.startswith("your_"):
             pytest.skip("YDC_API_KEY not set")
         os.environ["YDC_API_KEY"] = api_key
 
@@ -373,7 +382,7 @@ class TestGetYoudotcomResearchIntegration:
 
     def test_research_respects_effort_parameter(self):
         api_key = os.environ.get("YDC_API_KEY", "").strip()
-        if not api_key:
+        if not api_key or api_key.startswith("your_"):
             pytest.skip("YDC_API_KEY not set")
         os.environ["YDC_API_KEY"] = api_key
 
