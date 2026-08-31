@@ -6,8 +6,14 @@
 import pandas as pd
 import sys
 import io
+import re
 import warnings
 from datetime import datetime, timedelta
+
+# 应用 AkShare 请求补丁，减少东方财富 / 财联社接口被拦截的概率
+from utils.akshare_helper import patch_requests
+patch_requests()
+
 import akshare as ak
 
 warnings.filterwarnings('ignore')
@@ -53,7 +59,7 @@ class QStockNewsDataFetcher:
             "symbol": symbol,
             "news_data": None,
             "data_success": False,
-            "source": "qstock"
+            "source": "akshare"
         }
         
         if not self.available:
@@ -67,7 +73,7 @@ class QStockNewsDataFetcher:
         
         try:
             # 获取新闻数据
-            print(f"📰 正在使用qstock获取 {symbol} 的最新新闻...")
+            print(f"📰 正在使用akshare获取 {symbol} 的最新新闻...")
             news_data = self._get_news_data(symbol)
             
             if news_data:
@@ -94,6 +100,17 @@ class QStockNewsDataFetcher:
             print(f"   使用 akshare 获取新闻...")
             
             news_items = []
+            stock_name = None
+
+            try:
+                df_info = ak.stock_zh_a_spot_em()
+                if df_info is not None and not df_info.empty:
+                    match = df_info[df_info['代码'] == symbol]
+                    if not match.empty:
+                        stock_name = match.iloc[0]['名称']
+                        print(f"   找到股票名称: {stock_name}")
+            except Exception as e:
+                print(f"   ⚠ 获取股票名称失败: {e}")
             
             # 方法1: 尝试获取个股新闻（东方财富）
             try:
@@ -127,60 +144,56 @@ class QStockNewsDataFetcher:
             except Exception as e:
                 print(f"   ⚠ 从东方财富获取失败: {e}")
             
-            # 方法2: 如果没有获取到，尝试获取新浪财经新闻
+            # 方法2: 东方财富失败时，先尝试新浪全球快讯
             if not news_items:
                 try:
-                    # stock_zh_a_spot_em() - 获取股票信息，包含代码和名称
-                    df_info = ak.stock_zh_a_spot_em()
-                    
-                    # 查找股票名称
-                    stock_name = None
-                    if df_info is not None and not df_info.empty:
-                        match = df_info[df_info['代码'] == symbol]
-                        if not match.empty:
-                            stock_name = match.iloc[0]['名称']
-                            print(f"   找到股票名称: {stock_name}")
-                    
-                    # 使用股票名称搜索新闻
-                    if stock_name:
-                        # stock_news_sina - 新浪财经新闻
-                        try:
-                            df = ak.stock_news_sina(symbol=stock_name)
-                            if df is not None and not df.empty:
-                                print(f"   ✓ 从新浪财经获取到 {len(df)} 条新闻")
-                                
-                                for idx, row in df.head(self.max_items).iterrows():
-                                    item = {'source': '新浪财经'}
-                                    
-                                    for col in df.columns:
-                                        value = row.get(col)
-                                        if value is None or (isinstance(value, float) and pd.isna(value)):
-                                            continue
-                                        try:
-                                            item[col] = str(value)
-                                        except:
-                                            item[col] = "无法解析"
-                                    
-                                    if len(item) > 1:
-                                        news_items.append(item)
-                        except:
-                            pass
-                
+                    df = ak.stock_info_global_sina()
+                    if df is not None and not df.empty:
+                        print(f"   ✓ 从新浪财经获取到 {len(df)} 条全球快讯")
+
+                        keywords = [symbol]
+                        pattern = "|".join(re.escape(keyword) for keyword in keywords if keyword)
+                        df_filtered = df
+
+                        if pattern and 'summary' in df.columns:
+                            matched = df[df['summary'].astype(str).str.contains(pattern, na=False)]
+                            if not matched.empty:
+                                df_filtered = matched
+
+                        for idx, row in df_filtered.head(self.max_items).iterrows():
+                            item = {'source': '新浪财经'}
+                            for col in df_filtered.columns:
+                                value = row.get(col)
+                                if value is None or (isinstance(value, float) and pd.isna(value)):
+                                    continue
+                                try:
+                                    item[col] = str(value)
+                                except:
+                                    item[col] = "无法解析"
+                            if len(item) > 1:
+                                news_items.append(item)
                 except Exception as e:
                     print(f"   ⚠ 从新浪财经获取失败: {e}")
             
-            # 方法3: 尝试获取财联社电报
+            # 方法3: 再尝试财联社快讯
             if not news_items or len(news_items) < 5:
                 try:
-                    # stock_news_cls() - 财联社电报
-                    df = ak.stock_news_cls()
+                    # stock_info_global_cls() - 财联社全球快讯
+                    df = ak.stock_info_global_cls()
                     
                     if df is not None and not df.empty:
-                        # 筛选包含股票代码或名称的新闻
-                        df_filtered = df[
-                            df['内容'].str.contains(symbol, na=False) |
-                            df['标题'].str.contains(symbol, na=False)
-                        ]
+                        keywords = [symbol]
+                        if stock_name:
+                            keywords.append(stock_name)
+                        pattern = "|".join(re.escape(keyword) for keyword in keywords if keyword)
+
+                        df_filtered = df
+                        if pattern and '标题' in df.columns and '内容' in df.columns:
+                            title_mask = df['标题'].astype(str).str.contains(pattern, na=False)
+                            content_mask = df['内容'].astype(str).str.contains(pattern, na=False)
+                            matched = df[title_mask | content_mask]
+                            if not matched.empty:
+                                df_filtered = matched
                         
                         if not df_filtered.empty:
                             print(f"   ✓ 从财联社获取到 {len(df_filtered)} 条相关新闻")
@@ -202,6 +215,27 @@ class QStockNewsDataFetcher:
                 
                 except Exception as e:
                     print(f"   ⚠ 从财联社获取失败: {e}")
+
+            # 方法4: 财新快讯作为最后兜底
+            if not news_items:
+                try:
+                    df = ak.stock_news_main_cx()
+                    if df is not None and not df.empty:
+                        print(f"   ✓ 从财新获取到 {len(df)} 条财经精选")
+                        for idx, row in df.head(self.max_items).iterrows():
+                            item = {'source': '财新'}
+                            for col in df.columns:
+                                value = row.get(col)
+                                if value is None or (isinstance(value, float) and pd.isna(value)):
+                                    continue
+                                try:
+                                    item[col] = str(value)
+                                except:
+                                    item[col] = "无法解析"
+                            if len(item) > 1:
+                                news_items.append(item)
+                except Exception as e:
+                    print(f"   ⚠ 从财新获取失败: {e}")
             
             if not news_items:
                 print(f"   未找到股票 {symbol} 的新闻")
@@ -245,26 +279,33 @@ class QStockNewsDataFetcher:
             
             for idx, item in enumerate(news_data.get('items', []), 1):
                 text_parts.append(f"新闻 {idx}:")
-                
-                # 优先显示的字段
-                priority_fields = ['title', 'date', 'time', 'source', 'content', 'url']
-                
-                # 先显示优先字段
-                for field in priority_fields:
-                    if field in item:
-                        value = item[field]
-                        # 限制content长度
-                        if field == 'content' and len(str(value)) > 500:
-                            value = str(value)[:500] + "..."
-                        text_parts.append(f"  {field}: {value}")
-                
-                # 再显示其他字段
-                for key, value in item.items():
-                    if key not in priority_fields and key != 'source':
-                        # 跳过过长的字段
-                        if len(str(value)) > 300:
-                            value = str(value)[:300] + "..."
-                        text_parts.append(f"  {key}: {value}")
+
+                def _first_value(keys):
+                    for key in keys:
+                        value = item.get(key)
+                        if value not in (None, "", "N/A"):
+                            return value
+                    return None
+
+                title = _first_value(['title', '标题', '新闻标题'])
+                date = _first_value(['date', '日期', '发布时间', '发布日期', 'time', '时间'])
+                source = _first_value(['source', '来源'])
+                content = _first_value(['content', '内容', '新闻内容'])
+                url = _first_value(['url', '链接', '新闻链接'])
+
+                if title:
+                    text_parts.append(f"  标题: {title}")
+                if date:
+                    text_parts.append(f"  时间: {date}")
+                if source:
+                    text_parts.append(f"  来源: {source}")
+                if content:
+                    content_text = str(content)
+                    if len(content_text) > 500:
+                        content_text = content_text[:500] + "..."
+                    text_parts.append(f"  内容: {content_text}")
+                if url:
+                    text_parts.append(f"  链接: {url}")
                 
                 text_parts.append("")  # 空行分隔
         
@@ -303,4 +344,3 @@ if __name__ == "__main__":
             print(f"\n获取失败: {data.get('error', '未知错误')}")
         
         print("\n")
-

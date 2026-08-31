@@ -134,6 +134,14 @@ class FundFlowAkshareDataFetcher:
                         print(f"   [Akshare] {delay}s 后重试...")
                         time.sleep(delay)
             else:
+                # akshare明细接口全部失败，尝试使用当日资金流向排行接口兜底
+                rank_df = self._get_individual_fund_flow_rank(symbol)
+                if rank_df is not None and not rank_df.empty:
+                    df = rank_df
+                else:
+                    df = None
+
+            if 'df' not in locals() or df is None:
                 # akshare全部失败，尝试tushare
                 if data_source_manager.tushare_available:
                     try:
@@ -197,6 +205,43 @@ class FundFlowAkshareDataFetcher:
             print(f"   获取资金流向数据异常: {e}")
             import traceback
             traceback.print_exc()
+            return None
+
+    def _get_individual_fund_flow_rank(self, symbol):
+        """
+        使用 AkShare 当日资金流向排行作为兜底数据源。
+        返回单行 DataFrame，字段尽量与明细接口保持一致。
+        """
+        try:
+            print("   [Akshare] 尝试获取当日资金流向排行作为兜底...")
+            try:
+                df = ak.stock_individual_fund_flow_rank(market="今日")
+            except TypeError:
+                df = ak.stock_individual_fund_flow_rank()
+
+            if df is None or df.empty:
+                print("   [Akshare] 当日资金流向排行为空")
+                return None
+
+            if '代码' not in df.columns:
+                print("   [Akshare] 当日资金流向排行缺少代码列")
+                return None
+
+            stock_data = df[df['代码'] == symbol]
+            if stock_data.empty:
+                print(f"   [Akshare] 未找到股票 {symbol} 的当日资金流向排行数据")
+                return None
+
+            row = stock_data.iloc[0].copy()
+            if '日期' not in row.index:
+                row['日期'] = datetime.now().strftime('%Y-%m-%d')
+
+            rank_df = pd.DataFrame([row])
+            print(f"   [Akshare] ✅ 使用当日资金流向排行兜底获取到 {len(rank_df)} 条数据")
+            return rank_df
+
+        except Exception as e:
+            print(f"   [Akshare] 当日资金流向排行兜底失败: {e}")
             return None
     
     def format_fund_flow_for_ai(self, data):
@@ -340,4 +385,3 @@ if __name__ == "__main__":
             print(f"\n获取失败: {data.get('error', '未知错误')}")
         
         print("\n")
-

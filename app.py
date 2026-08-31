@@ -461,7 +461,7 @@ def main():
         period = st.selectbox(
             "数据周期",
             ["1y", "6mo", "3mo", "1mo"],
-            index=0,
+            index=2,
             help="选择历史数据的时间范围"
         )
 
