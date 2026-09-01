@@ -16,6 +16,10 @@ DEFAULT_MODEL_NAME = os.getenv("DEFAULT_MODEL_NAME", "deepseek-chat")
 
 # 其他配置
 TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+UZI_SKILL_ROOT = os.getenv("UZI_SKILL_ROOT", "")
+UZI_REPORT_ROOT = os.getenv("UZI_REPORT_ROOT", "data/uzi-reports")
+UZI_DEFAULT_DEPTH = os.getenv("UZI_DEFAULT_DEPTH", "medium")
+UZI_DEFAULT_SCHOOL = os.getenv("UZI_DEFAULT_SCHOOL", "")
 
 # 股票数据源配置
 DEFAULT_PERIOD = "1y"  # 默认获取1年数据

@@ -58,6 +58,12 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/ &&
 # 复制项目文件
 COPY . .
 
+# 如果项目根目录下带了 UZI-Skill-main，则一并安装它的依赖
+RUN if [ -f /app/UZI-Skill-main/requirements.txt ]; then \
+        pip install --no-cache-dir --default-timeout=1000 -r /app/UZI-Skill-main/requirements.txt && \
+        python -m playwright install chromium; \
+    fi
+
 # 创建必要的目录
 RUN mkdir -p /app/data && chmod 777 /app/data
 

@@ -38,6 +38,32 @@ class ConfigManager:
                 "required": False,
                 "type": "password"
             },
+            "UZI_SKILL_ROOT": {
+                "value": "",
+                "description": "UZI-Skill 仓库路径",
+                "required": False,
+                "type": "text"
+            },
+            "UZI_REPORT_ROOT": {
+                "value": "data/uzi-reports",
+                "description": "UZI 报告输出目录",
+                "required": False,
+                "type": "text"
+            },
+            "UZI_DEFAULT_DEPTH": {
+                "value": "medium",
+                "description": "UZI 默认分析深度",
+                "required": False,
+                "type": "select",
+                "options": ["lite", "medium", "deep"]
+            },
+            "UZI_DEFAULT_SCHOOL": {
+                "value": "",
+                "description": "UZI 默认流派视角",
+                "required": False,
+                "type": "select",
+                "options": ["", "A", "B", "C", "D", "E", "F", "G", "H", "I"]
+            },
             "MINIQMT_ENABLED": {
                 "value": "false",
                 "description": "启用MiniQMT量化交易",
@@ -207,6 +233,10 @@ class ConfigManager:
             # 数据接口配置
             lines.append("# ========== 数据接口配置（可选）==========")
             lines.append(f'TUSHARE_TOKEN="{full_config.get("TUSHARE_TOKEN", "")}"')
+            lines.append(f'UZI_SKILL_ROOT="{full_config.get("UZI_SKILL_ROOT", "")}"')
+            lines.append(f'UZI_REPORT_ROOT="{full_config.get("UZI_REPORT_ROOT", "data/uzi-reports")}"')
+            lines.append(f'UZI_DEFAULT_DEPTH="{full_config.get("UZI_DEFAULT_DEPTH", "medium")}"')
+            lines.append(f'UZI_DEFAULT_SCHOOL="{full_config.get("UZI_DEFAULT_SCHOOL", "")}"')
             lines.append(f'TDX_BASE_URL="{full_config.get("TDX_BASE_URL", "http://127.0.0.1:8080")}"')
             lines.append(f'YDC_API_KEY="{full_config.get("YDC_API_KEY", "")}"')
             lines.append(f'YDC_RESEARCH_EFFORT="{full_config.get("YDC_RESEARCH_EFFORT", "standard")}"')
@@ -240,7 +270,8 @@ class ConfigManager:
             # 保留其他非标准自定义键
             written_keys = {
                 "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEFAULT_MODEL_NAME",
-                "TUSHARE_TOKEN", "TDX_BASE_URL", "YDC_API_KEY", "YDC_RESEARCH_EFFORT",
+                "TUSHARE_TOKEN", "UZI_SKILL_ROOT", "UZI_REPORT_ROOT", "UZI_DEFAULT_DEPTH", "UZI_DEFAULT_SCHOOL",
+                "TDX_BASE_URL", "YDC_API_KEY", "YDC_RESEARCH_EFFORT",
                 "MINIQMT_ENABLED", "MINIQMT_ACCOUNT_ID", "MINIQMT_HOST", "MINIQMT_PORT",
                 "EMAIL_ENABLED", "SMTP_SERVER", "SMTP_PORT", "EMAIL_FROM", "EMAIL_PASSWORD", "EMAIL_TO",
                 "WEBHOOK_ENABLED", "WEBHOOK_TYPE", "WEBHOOK_URL", "WEBHOOK_KEYWORD"
@@ -302,4 +333,3 @@ class ConfigManager:
 
 # 全局配置管理器实例
 config_manager = ConfigManager()
-

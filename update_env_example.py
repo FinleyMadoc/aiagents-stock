@@ -25,6 +25,20 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 TUSHARE_TOKEN=
 
 
+# ========== UZI-Skill集成（可选）==========
+# UZI-Skill 仓库路径（服务器上建议挂载到容器可见目录）
+UZI_SKILL_ROOT=
+
+# UZI 报告输出目录
+UZI_REPORT_ROOT=data/uzi-reports
+
+# 默认分析深度
+UZI_DEFAULT_DEPTH=medium
+
+# 默认流派视角
+UZI_DEFAULT_SCHOOL=
+
+
 # ========== MiniQMT量化交易配置（可选）==========
 # 是否启用MiniQMT量化交易接口
 MINIQMT_ENABLED=false
@@ -104,4 +118,3 @@ with open('.env.example', 'w', encoding='utf-8') as f:
 print("[OK] .env.example file updated successfully")
 print("[OK] File encoding: UTF-8")
 print("[OK] All Chinese characters should display correctly")
-
