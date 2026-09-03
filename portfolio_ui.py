@@ -6,6 +6,7 @@
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict
@@ -591,6 +592,11 @@ def display_scheduler_management():
             value=portfolio_scheduler.auto_monitor_sync,
             help="分析完成后自动将结果同步到实时监测列表"
         )
+        run_uzi_skill = st.checkbox(
+            "同步运行 new-skill-uzi",
+            value=getattr(portfolio_scheduler, "run_uzi_skill", True),
+            help="定时任务执行时，逐只运行 UZI 个股深度分析"
+        )
         send_notification = st.checkbox(
             "发送完成通知", 
             value=portfolio_scheduler.notification_enabled,
@@ -605,7 +611,8 @@ def display_scheduler_management():
                     analysis_mode=analysis_mode,
                     max_workers=max_workers if analysis_mode == "parallel" else 1,
                     auto_sync_monitor=auto_sync_monitor,
-                    send_notification=send_notification
+                    send_notification=send_notification,
+                    run_uzi_skill=run_uzi_skill
                 )
                 st.success("配置已更新！")
                 time.sleep(0.5)
@@ -618,7 +625,8 @@ def display_scheduler_management():
                     analysis_mode="sequential",
                     max_workers=1,
                     auto_sync_monitor=True,
-                    send_notification=True
+                    send_notification=True,
+                    run_uzi_skill=True
                 )
                 st.success("已恢复默认配置！")
                 time.sleep(0.5)
@@ -730,6 +738,9 @@ def display_history_record(record: Dict):
     take_profit = record.get("take_profit")
     stop_loss = record.get("stop_loss")
     summary = record.get("summary", "")
+    uzi_report_path = record.get("uzi_report_path", "")
+    uzi_output_dir = record.get("uzi_output_dir", "")
+    uzi_result_json = record.get("uzi_result_json", "")
     
     # 评级颜色
     if "强烈买入" in rating or "买入" in rating:
@@ -768,5 +779,28 @@ def display_history_record(record: Dict):
             st.markdown("**分析摘要**")
             st.info(summary)
         
-        st.caption(f"置信度: {confidence}%")
+        if uzi_report_path or uzi_output_dir or uzi_result_json:
+            st.markdown("**UZI 分析**")
+            if uzi_report_path:
+                st.write(f"报告: {uzi_report_path}")
+                if st.button("打开 UZI 报告", key=f"uzi_open_{record.get('id')}"):
+                    try:
+                        with open(uzi_report_path, "r", encoding="utf-8") as f:
+                            html = f.read()
+                        st.session_state[f"uzi_html_{record.get('id')}"] = html
+                    except Exception as e:
+                        st.error(f"打开失败: {e}")
+            if uzi_output_dir:
+                st.caption(f"目录: {uzi_output_dir}")
+            if uzi_result_json:
+                import json
+                try:
+                    uzi_result = json.loads(uzi_result_json)
+                except Exception:
+                    uzi_result = {}
+                if uzi_result:
+                    st.json(uzi_result, expanded=False)
+                if st.session_state.get(f"uzi_html_{record.get('id')}"):
+                    components.html(st.session_state[f"uzi_html_{record.get('id')}"], height=800, scrolling=True)
 
+        st.caption(f"置信度: {confidence}%")

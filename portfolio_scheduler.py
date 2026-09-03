@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, Callable
 import traceback
 
+import config
 from portfolio_manager import portfolio_manager
 from notification_service import NotificationService
 
@@ -31,6 +32,8 @@ class PortfolioScheduler:
         self.selected_agents = None  # None表示全部分析师
         self.notification_service = NotificationService()
         self.max_workers = 3  # 并行模式的线程数
+        self.run_uzi_skill = True  # 定时任务默认同步运行 new-skill-uzi
+        self.last_uzi_results = []
     
     # 兼容旧代码的属性
     @property
@@ -187,6 +190,11 @@ class PortfolioScheduler:
             print(f"[OK] 选择分析师: {', '.join(agents)}")
         else:
             print("[OK] 选择分析师: 全部")
+
+    def set_run_uzi_skill(self, enabled: bool):
+        """设置是否在定时任务中同步运行 new-skill-uzi"""
+        self.run_uzi_skill = enabled
+        print(f"[OK] new-skill-uzi 定时分析: {'启用' if enabled else '禁用'}")
     
     def _scheduled_job(self):
         """定时任务执行的作业"""
@@ -196,7 +204,7 @@ class PortfolioScheduler:
         
         try:
             # 1. 执行批量分析
-            print("[1/4] 执行持仓批量分析...")
+            print("[1/5] 执行持仓批量分析（app.py 默认单股分析链路）...")
             analysis_results = portfolio_manager.batch_analyze_portfolio(
                 mode=self.analysis_mode,
                 max_workers=self.max_workers,
@@ -214,25 +222,38 @@ class PortfolioScheduler:
                 self.last_run_time = datetime.now()
                 return
             
-            # 2. 保存分析结果
-            print("\n[2/4] 保存分析结果...")
+            # 2. 执行 new-skill-uzi 默认分析
+            if self.run_uzi_skill:
+                print("\n[2/5] 执行 new-skill-uzi 默认分析...")
+                uzi_results = self._run_uzi_skill_for_portfolio(analysis_results)
+                analysis_results["uzi_results"] = uzi_results
+                self.last_uzi_results = uzi_results
+                uzi_success_count = sum(1 for item in uzi_results if item.get("success"))
+                print(f"[OK] new-skill-uzi 完成: {uzi_success_count}/{len(uzi_results)}")
+            else:
+                print("\n[2/5] 跳过 new-skill-uzi（已禁用）")
+                analysis_results["uzi_results"] = []
+                self.last_uzi_results = []
+
+            # 3. 保存分析结果
+            print("\n[3/5] 保存分析结果...")
             saved_ids = portfolio_manager.save_analysis_results(analysis_results)
             print(f"[OK] 保存 {len(saved_ids)} 条分析记录")
             
-            # 3. 自动监测同步
+            # 4. 自动监测同步
             sync_result = None
             if self.auto_monitor_sync:
-                print("\n[3/4] 自动同步到监测列表...")
+                print("\n[4/5] 自动同步到监测列表...")
                 sync_result = self._sync_to_monitor(analysis_results)
             else:
-                print("\n[3/4] 跳过监测同步（已禁用）")
+                print("\n[4/5] 跳过监测同步（已禁用）")
             
-            # 4. 发送通知
+            # 5. 发送通知
             if self.notification_enabled:
-                print("\n[4/4] 发送通知...")
+                print("\n[5/5] 发送通知...")
                 self._send_notification(analysis_results, sync_result)
             else:
-                print("\n[4/4] 跳过通知发送（已禁用）")
+                print("\n[5/5] 跳过通知发送（已禁用）")
             
             # 更新运行时间
             self.last_run_time = datetime.now()
@@ -250,6 +271,86 @@ class PortfolioScheduler:
                 self._send_error_notification(str(e))
             
             self.last_run_time = datetime.now()
+
+    def _run_uzi_skill_for_portfolio(self, analysis_results: dict) -> list:
+        """为持仓股票逐只运行 new-skill-uzi。"""
+        stocks = portfolio_manager.get_all_stocks()
+        if not stocks:
+            return []
+
+        result_by_code = {
+            str(item.get("code", "")).upper(): item
+            for item in analysis_results.get("results", [])
+        }
+        uzi_results = []
+
+        try:
+            from uzi_skill_adapter import UZISkillAdapter
+            adapter = UZISkillAdapter(output_root=getattr(config, "UZI_REPORT_ROOT", "data/uzi-reports"))
+        except Exception as e:
+            error = f"UZI 仓库不可用: {e}"
+            print(f"[UZI] {error}")
+            for stock in stocks:
+                item = {
+                    "code": stock.get("code", ""),
+                    "name": stock.get("name", ""),
+                    "success": False,
+                    "error": error,
+                    "report_path": "",
+                    "output_dir": "",
+                }
+                uzi_results.append(item)
+                matched = result_by_code.get(str(stock.get("code", "")).upper())
+                if matched is not None:
+                    matched["uzi_result"] = item
+            return uzi_results
+
+        depth = getattr(config, "UZI_DEFAULT_DEPTH", "medium")
+        school = getattr(config, "UZI_DEFAULT_SCHOOL", "") or None
+
+        for index, stock in enumerate(stocks, 1):
+            code = str(stock.get("code", "")).strip()
+            name = stock.get("name", "")
+            print(f"[UZI] ({index}/{len(stocks)}) 分析 {code} {name}")
+
+            try:
+                result = adapter.run(
+                    code,
+                    depth=depth,
+                    school=school,
+                    no_resume=False,
+                )
+                item = {
+                    "code": code,
+                    "name": name,
+                    "success": result.success,
+                    "error": result.error,
+                    "report_path": result.report_path,
+                    "output_dir": result.output_dir,
+                    "repo_root": result.repo_root,
+                    "depth": depth,
+                    "school": school or "",
+                }
+                print(f"[UZI] {'成功' if result.success else '失败'}: {code}")
+            except Exception as e:
+                item = {
+                    "code": code,
+                    "name": name,
+                    "success": False,
+                    "error": str(e),
+                    "report_path": "",
+                    "output_dir": "",
+                    "depth": depth,
+                    "school": school or "",
+                }
+                print(f"[UZI] 异常: {code} - {e}")
+
+            uzi_results.append(item)
+            matched = result_by_code.get(code.upper())
+            if matched is not None:
+                matched["uzi_result"] = item
+
+        return uzi_results
     
     def _sync_to_monitor(self, analysis_results: dict) -> dict:
         """
@@ -490,7 +591,7 @@ class PortfolioScheduler:
     def _reschedule(self):
         """重新调度任务（支持多个时间点）"""
         # 只清除持仓定时分析的任务，不影响其他模块
-        jobs_to_remove = [job for job in schedule.jobs if not any(tag in ['sector_strategy', 'monitor'] for tag in job.tags)]
+        jobs_to_remove = [job for job in schedule.jobs if 'portfolio_analysis' in job.tags]
         for job in jobs_to_remove:
             schedule.cancel_job(job)
         
@@ -631,6 +732,7 @@ class PortfolioScheduler:
             "analysis_mode": self.analysis_mode,
             "auto_monitor_sync": self.auto_monitor_sync,
             "notification_enabled": self.notification_enabled,
+            "run_uzi_skill": self.run_uzi_skill,
             "last_run_time": self.last_run_time.strftime("%Y-%m-%d %H:%M:%S") if self.last_run_time else None,
             "next_run_time": self.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if self.next_run_time else None,
             "portfolio_count": portfolio_manager.get_stock_count()
@@ -649,7 +751,7 @@ class PortfolioScheduler:
     
     def update_config(self, schedule_time: str = None, analysis_mode: str = None,
                      max_workers: int = None, auto_sync_monitor: bool = None,
-                     send_notification: bool = None):
+                     send_notification: bool = None, run_uzi_skill: bool = None):
         """
         更新调度器配置
         
@@ -675,6 +777,9 @@ class PortfolioScheduler:
         
         if send_notification is not None:
             self.set_notification_enabled(send_notification)
+
+        if run_uzi_skill is not None:
+            self.set_run_uzi_skill(run_uzi_skill)
         
         print("[OK] 配置已更新")
     
@@ -731,4 +836,3 @@ if __name__ == "__main__":
         print(f"  {key}: {value}")
     
     print("\n[OK] 调度器测试完成")
-

@@ -18,6 +18,9 @@ def generate_main_force_markdown_report(analyzer, result):
     max_cap = params.get('max_market_cap', 5000)
     max_change = params.get('max_range_change', 50)
     
+    total_fetched = result.get('total_fetched', result.get('total_stocks', 0))
+    filtered_count = result.get('filtered_count', result.get('filtered_stocks', 0))
+
     markdown_content = f"""
 # 主力选股AI分析报告
 
@@ -32,8 +35,8 @@ def generate_main_force_markdown_report(analyzer, result):
 | **起始日期** | {start_date} |
 | **市值范围** | {min_cap}亿 - {max_cap}亿 |
 | **最大涨跌幅** | {max_change}% |
-| **初始数据量** | {result.get('total_fetched', 0)}只 |
-| **筛选后数量** | {result.get('filtered_count', 0)}只 |
+| **初始数据量** | {total_fetched}只 |
+| **筛选后数量** | {filtered_count}只 |
 | **最终推荐** | {len(result.get('final_recommendations', []))}只 |
 
 ---
@@ -453,4 +456,3 @@ def display_report_download_section(analyzer, result):
             mime="text/csv",
             width='content'
         )
-

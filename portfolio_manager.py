@@ -400,7 +400,14 @@ class PortfolioManager:
         if not analysis_results.get("success"):
             print("[WARN] 分析未成功，跳过保存")
             return saved_ids
-        
+
+        uzi_results = analysis_results.get("uzi_results", []) or []
+        uzi_result_map = {}
+        for item in uzi_results:
+            code = str(item.get("code", "")).strip().upper()
+            if code:
+                uzi_result_map[code] = item
+
         for item in analysis_results.get("results", []):
             code = item.get("code")
             result = item.get("result", {})
@@ -478,12 +485,18 @@ class PortfolioManager:
             
             # 生成摘要（使用advice或summary字段）
             summary = final_decision.get("advice", final_decision.get("summary", ""))[:500]  # 限制长度
-            
+            uzi_result = item.get("uzi_result") or uzi_result_map.get(str(code).strip().upper(), {})
+            uzi_report_path = uzi_result.get("report_path", "") if isinstance(uzi_result, dict) else ""
+            uzi_output_dir = uzi_result.get("output_dir", "") if isinstance(uzi_result, dict) else ""
+
             try:
                 # 保存到数据库
                 analysis_id = self.db.save_analysis(
                     stock_id, rating, confidence, current_price, target_price,
-                    entry_min, entry_max, take_profit, stop_loss, summary
+                    entry_min, entry_max, take_profit, stop_loss, summary,
+                    uzi_report_path=uzi_report_path,
+                    uzi_output_dir=uzi_output_dir,
+                    uzi_result=uzi_result if isinstance(uzi_result, dict) else {}
                 )
                 saved_ids.append(analysis_id)
                 
@@ -535,4 +548,3 @@ if __name__ == "__main__":
         print(f"  {stock['code']} {stock['name']} - 成本:{stock['cost_price']}, 数量:{stock['quantity']}")
     
     print("\n[OK] 持仓管理器测试完成")
-

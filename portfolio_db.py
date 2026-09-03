@@ -5,6 +5,7 @@
 """
 
 import sqlite3
+import json
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 import os
@@ -68,6 +69,9 @@ class PortfolioDB:
                     take_profit REAL,
                     stop_loss REAL,
                     summary TEXT,
+                    uzi_report_path TEXT,
+                    uzi_output_dir TEXT,
+                    uzi_result_json TEXT,
                     FOREIGN KEY (portfolio_stock_id) REFERENCES portfolio_stocks(id) ON DELETE CASCADE
                 )
             ''')
@@ -82,6 +86,8 @@ class PortfolioDB:
                 CREATE INDEX IF NOT EXISTS idx_portfolio_analysis_time 
                 ON portfolio_analysis_history(analysis_time DESC)
             ''')
+
+            self._migrate_database(cursor)
             
             conn.commit()
             print(f"[OK] 数据库初始化成功: {self.db_path}")
@@ -92,6 +98,24 @@ class PortfolioDB:
             raise
         finally:
             conn.close()
+
+    def _migrate_database(self, cursor):
+        """数据库迁移：补充新字段"""
+        migrations = [
+            ('portfolio_analysis_history', 'uzi_report_path', 'TEXT'),
+            ('portfolio_analysis_history', 'uzi_output_dir', 'TEXT'),
+            ('portfolio_analysis_history', 'uzi_result_json', 'TEXT'),
+        ]
+
+        for table, column, column_def in migrations:
+            try:
+                cursor.execute(f"PRAGMA table_info({table})")
+                columns = [row[1] for row in cursor.fetchall()]
+                if column not in columns:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+                    print(f"[OK] 迁移: 向 {table} 添加列 {column}")
+            except Exception as e:
+                print(f"[WARN] 迁移列 {table}.{column} 时出错: {e}")
     
     # ==================== 持仓股票CRUD操作 ====================
     
@@ -353,7 +377,8 @@ class PortfolioDB:
                      current_price: float, target_price: Optional[float] = None,
                      entry_min: Optional[float] = None, entry_max: Optional[float] = None,
                      take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
-                     summary: str = "") -> int:
+                     summary: str = "", uzi_report_path: str = "",
+                     uzi_output_dir: str = "", uzi_result: Dict = None) -> int:
         """
         保存分析历史记录
         
@@ -368,21 +393,27 @@ class PortfolioDB:
             take_profit: 止盈位
             stop_loss: 止损位
             summary: 分析摘要
-            
+            uzi_report_path: UZI HTML 报告路径
+            uzi_output_dir: UZI 输出目录
+            uzi_result: UZI 结果摘要
+
         Returns:
             新增分析记录的ID
         """
         conn = self._get_connection()
         cursor = conn.cursor()
+        uzi_result_json = json.dumps(uzi_result or {}, ensure_ascii=False, default=str)
         
         try:
             cursor.execute('''
                 INSERT INTO portfolio_analysis_history 
                 (portfolio_stock_id, analysis_time, rating, confidence, current_price,
-                 target_price, entry_min, entry_max, take_profit, stop_loss, summary)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 target_price, entry_min, entry_max, take_profit, stop_loss, summary,
+                 uzi_report_path, uzi_output_dir, uzi_result_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (stock_id, datetime.now(), rating, confidence, current_price,
-                  target_price, entry_min, entry_max, take_profit, stop_loss, summary))
+                  target_price, entry_min, entry_max, take_profit, stop_loss, summary,
+                  uzi_report_path, uzi_output_dir, uzi_result_json))
             
             conn.commit()
             analysis_id = cursor.lastrowid
@@ -622,4 +653,3 @@ if __name__ == "__main__":
             print(f"  {h['analysis_time']}: {h['rating']} (信心度: {h['confidence']})")
     
     print("\n[OK] 数据库测试完成")
-

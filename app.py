@@ -18,11 +18,15 @@ from monitor_service import monitor_service
 from notification_service import notification_service
 from config_manager import config_manager
 from main_force_ui import display_main_force_selector
+from main_force_schedule_ui import display_main_force_schedule_page
 from sector_strategy_ui import display_sector_strategy
 from longhubang_ui import display_longhubang
 from smart_monitor_ui import smart_monitor_ui
 from news_flow_ui import display_news_flow_monitor
 from uzi_skill_ui import display_new_skill_uzi
+
+AUTH_USERNAME = "staff"
+AUTH_PASSWORD = "staff_jimmy"
 
 # 页面配置
 st.set_page_config(
@@ -39,6 +43,54 @@ def show_current_model_info():
     st.sidebar.subheader("🤖 AI模型")
     st.sidebar.info(f"当前模型: **{config.DEFAULT_MODEL_NAME}**")
     st.sidebar.caption("可在「环境配置」中修改模型名称")
+
+
+def init_auth_state():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "auth_username" not in st.session_state:
+        st.session_state.auth_username = ""
+
+
+def logout_user():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.session_state.authenticated = False
+    st.session_state.auth_username = ""
+    st.rerun()
+
+
+def render_login_page():
+    st.markdown("""
+    <div class="top-nav">
+        <h1 class="nav-title">📈 复合多AI智能体股票团队分析系统</h1>
+        <p class="nav-subtitle">请先登录后使用系统</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 1.1, 1])
+    with col2:
+        st.markdown("### 登录")
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input("账号")
+            password = st.text_input("密码", type="password")
+            submitted = st.form_submit_button("登录", use_container_width=True)
+
+        if submitted:
+            if username == AUTH_USERNAME and password == AUTH_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.auth_username = username
+                st.success("登录成功")
+                st.rerun()
+            else:
+                st.error("账号或密码错误")
+
+
+def require_login():
+    init_auth_state()
+    if not st.session_state.authenticated:
+        render_login_page()
+        st.stop()
 
 # 自定义CSS样式 - 专业版
 st.markdown("""
@@ -460,6 +512,8 @@ def display_stock_analysis_home(period):
         show_example_interface()
 
 def main():
+    require_login()
+
     # 顶部标题栏
     st.markdown("""
     <div class="top-nav">
@@ -473,6 +527,12 @@ def main():
 
     # 侧边栏
     with st.sidebar:
+        st.markdown(f"**当前用户**: {st.session_state.get('auth_username', AUTH_USERNAME)}")
+        if st.button("退出登录", width='stretch', key="logout_button"):
+            logout_user()
+
+        st.markdown("---")
+
         # 快捷导航 - 移到顶部
         st.markdown("### 🔍 功能导航")
 
@@ -480,7 +540,7 @@ def main():
         if st.button("🏠 股票分析", width='stretch', key="nav_home", help="返回首页，进行单只股票的深度分析"):
             # 清除所有功能页面标志
             for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                       'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis', 'show_value_stock', 'show_new_skill_uzi']:
+                       'show_main_force_scheduler', 'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis', 'show_value_stock', 'show_new_skill_uzi']:
                 if key in st.session_state:
                     del st.session_state[key]
 
@@ -493,35 +553,42 @@ def main():
             if st.button("💰 主力选股", width='stretch', key="nav_main_force", help="基于主力资金流向的选股策略"):
                 st.session_state.show_main_force = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
-                           'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis', 'show_new_skill_uzi']:
+                           'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis', 'show_new_skill_uzi', 'show_main_force_scheduler']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+
+            if st.button("⏰ 主力任务", width='stretch', key="nav_main_force_scheduler", help="配置主力选股定时任务"):
+                st.session_state.show_main_force_scheduler = True
+                for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
+                           'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis', 'show_new_skill_uzi', 'show_main_force']:
                     if key in st.session_state:
                         del st.session_state[key]
             
             if st.button("🐂 低价擒牛", width='stretch', key="nav_low_price_bull", help="低价高成长股票筛选策略"):
                 st.session_state.show_low_price_bull = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
-                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_small_cap', 'show_profit_growth', 'show_news_flow', 'show_macro_analysis']:
+                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_main_force_scheduler', 'show_small_cap', 'show_profit_growth', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
             
             if st.button("📊 小市值策略", width='stretch', key="nav_small_cap", help="小盘高成长股票筛选策略"):
                 st.session_state.show_small_cap = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
-                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_low_price_bull', 'show_profit_growth', 'show_news_flow', 'show_macro_analysis']:
+                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_main_force_scheduler', 'show_low_price_bull', 'show_profit_growth', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
             
             if st.button("📈 净利增长", width='stretch', key="nav_profit_growth", help="净利润增长稳健股票筛选策略"):
                 st.session_state.show_profit_growth = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
-                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_low_price_bull', 'show_small_cap', 'show_news_flow', 'show_value_stock', 'show_macro_analysis']:
+                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_main_force_scheduler', 'show_low_price_bull', 'show_small_cap', 'show_news_flow', 'show_value_stock', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("💎 低估值策略", width='stretch', key="nav_value_stock", help="低PE+低PB+高股息+低负债 价值投资筛选"):
                 st.session_state.show_value_stock = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_sector_strategy',
-                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_low_price_bull', 'show_small_cap', 'show_profit_growth', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis']:
+                           'show_longhubang', 'show_portfolio', 'show_main_force', 'show_main_force_scheduler', 'show_low_price_bull', 'show_small_cap', 'show_profit_growth', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
@@ -532,35 +599,35 @@ def main():
             if st.button("🎯 智策板块", width='stretch', key="nav_sector_strategy", help="AI板块策略分析"):
                 st.session_state.show_sector_strategy = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_longhubang', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_longhubang', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("🐉 智瞰龙虎", width='stretch', key="nav_longhubang", help="龙虎榜深度分析"):
                 st.session_state.show_longhubang = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
             
             if st.button("📰 新闻流量", width='stretch', key="nav_news_flow", help="新闻流量监测与短线指导"):
                 st.session_state.show_news_flow = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_macro_cycle', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_macro_cycle', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("🌏 宏观分析", width='stretch', key="nav_macro_analysis", help="国家统计局宏观数据 × A股行业映射 × 优质标的"):
                 st.session_state.show_macro_analysis = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_cycle']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_cycle']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("🧭 宏观周期", width='stretch', key="nav_macro_cycle", help="康波周期 × 美林投资时钟 × 政策分析"):
                 st.session_state.show_macro_cycle = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
@@ -569,7 +636,7 @@ def main():
             if st.button("🧠 new-skill-uzi", width='stretch', key="nav_new_skill_uzi", help="调用外部 UZI-Skill 做个股深度分析"):
                 st.session_state.show_new_skill_uzi = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_analysis', 'show_macro_cycle']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_portfolio', 'show_smart_monitor', 'show_low_price_bull', 'show_longhubang', 'show_news_flow', 'show_macro_analysis', 'show_macro_cycle']:
                     if key in st.session_state:
                         del st.session_state[key]
 
@@ -580,21 +647,21 @@ def main():
             if st.button("📊 持仓分析", width='stretch', key="nav_portfolio", help="投资组合分析与定时跟踪"):
                 st.session_state.show_portfolio = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_longhubang', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_longhubang', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("🤖 AI盯盘", width='stretch', key="nav_smart_monitor", help="DeepSeek AI自动盯盘决策交易（支持A股T+1）"):
                 st.session_state.show_smart_monitor = True
                 for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                           'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
             if st.button("📡 实时监测", width='stretch', key="nav_monitor", help="价格监控与预警提醒"):
                 st.session_state.show_monitor = True
                 for key in ['show_history', 'show_main_force', 'show_longhubang', 'show_portfolio',
-                           'show_config', 'show_sector_strategy', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                           'show_main_force_scheduler', 'show_config', 'show_sector_strategy', 'show_smart_monitor', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                     if key in st.session_state:
                         del st.session_state[key]
 
@@ -604,7 +671,7 @@ def main():
         if st.button("📖 历史记录", width='stretch', key="nav_history", help="查看历史分析记录"):
             st.session_state.show_history = True
             for key in ['show_monitor', 'show_longhubang', 'show_portfolio', 'show_config',
-                       'show_main_force', 'show_sector_strategy', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
+                       'show_main_force', 'show_main_force_scheduler', 'show_sector_strategy', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis']:
                 if key in st.session_state:
                     del st.session_state[key]
 
@@ -714,6 +781,11 @@ def main():
     # 检查是否显示主力选股
     if 'show_main_force' in st.session_state and st.session_state.show_main_force:
         display_main_force_selector()
+        return
+
+    # 检查是否显示主力定时任务
+    if 'show_main_force_scheduler' in st.session_state and st.session_state.show_main_force_scheduler:
+        display_main_force_schedule_page()
         return
     
     # 检查是否显示低价擒牛
