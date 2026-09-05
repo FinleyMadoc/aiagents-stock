@@ -10,6 +10,7 @@ import pandas as pd
 import pywencai
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
+import re
 import time
 from utils.pywencai_helper import safe_get
 
@@ -21,7 +22,8 @@ class MainForceStockSelector:
         self.filtered_stocks = None
     
     def get_main_force_stocks(self, start_date: str = None, days_ago: int = None,
-                             min_market_cap: float = None, max_market_cap: float = None) -> Tuple[bool, pd.DataFrame, str]:
+                             min_market_cap: float = None, max_market_cap: float = None,
+                             main_board_only: bool = False) -> Tuple[bool, pd.DataFrame, str]:
         """
         获取主力资金净流入前100名股票
         
@@ -30,7 +32,8 @@ class MainForceStockSelector:
             days_ago: 距今多少天
             min_market_cap: 最小市值限制
             max_market_cap: 最大市值限制
-            
+            main_board_only: 是否仅保留6/0开头主板股票
+           
         Returns:
             (success, dataframe, message)
         """
@@ -85,6 +88,12 @@ class MainForceStockSelector:
                         print(f"  ⚠️ 方案{i}数据为空，尝试下一个方案")
                         continue
                     
+                    if main_board_only:
+                        df_result = self._filter_main_board_only(df_result)
+                        if df_result.empty:
+                            print(f"  ⚠️ 方案{i}主板过滤后为空，尝试下一个方案")
+                            continue
+
                     # 成功获取数据
                     print(f"  ✅ 方案{i}成功！获取到 {len(df_result)} 只股票")
                     self.raw_data = df_result
@@ -139,7 +148,8 @@ class MainForceStockSelector:
     def filter_stocks(self, df: pd.DataFrame, 
                      max_range_change: float = None,
                      min_market_cap: float = None,
-                     max_market_cap: float = None) -> pd.DataFrame:
+                     max_market_cap: float = None,
+                     main_board_only: bool = False) -> pd.DataFrame:
         """
         智能筛选股票 - 基于涨跌幅和市值
         
@@ -148,6 +158,7 @@ class MainForceStockSelector:
             max_range_change: 最大涨跌幅限制
             min_market_cap: 最小市值限制
             max_market_cap: 最大市值限制
+            main_board_only: 是否仅保留6/0开头主板股票
             
         Returns:
             筛选后的DataFrame
@@ -161,9 +172,16 @@ class MainForceStockSelector:
         print(f"筛选条件:")
         print(f"  - 区间涨跌幅 < {max_range_change}%")
         print(f"  - 市值范围: {min_market_cap}-{max_market_cap}亿")
+        print(f"  - 仅保留主板股票(6/0开头): {main_board_only}")
         
         original_count = len(df)
         filtered_df = df.copy()
+
+        # 0. 仅保留主板股票（6/0开头）
+        if main_board_only:
+            before = len(filtered_df)
+            filtered_df = self._filter_main_board_only(filtered_df)
+            print(f"  主板股票筛选: {before} -> {len(filtered_df)} 只")
         
         # 1. 筛选区间涨跌幅（智能匹配列名）
         # 优先精确匹配，按优先级查找
@@ -236,6 +254,42 @@ class MainForceStockSelector:
         print(f"\n筛选完成: {original_count} -> {len(filtered_df)} 只股票")
         
         self.filtered_stocks = filtered_df
+        return filtered_df
+
+    def _filter_main_board_only(self, df: pd.DataFrame) -> pd.DataFrame:
+        """仅保留股票代码以 0 或 6 开头的主板股票"""
+        if df is None or df.empty:
+            return df
+
+        code_col = None
+        preferred_columns = [
+            "股票代码",
+            "证券代码",
+            "代码",
+            "stock_code",
+            "ts_code",
+        ]
+        for name in preferred_columns:
+            matches = [col for col in df.columns if name == col or name in col]
+            if matches:
+                code_col = matches[0]
+                break
+
+        if not code_col:
+            print("  ⚠️ 未找到股票代码字段，跳过主板过滤")
+            return df
+
+        def _keep_main_board(value) -> bool:
+            if pd.isna(value):
+                return False
+            code_str = str(value).strip().upper()
+            match = re.search(r"(\d{6})", code_str)
+            if not match:
+                return False
+            code = match.group(1)
+            return code.startswith(("0", "6"))
+
+        filtered_df = df[df[code_col].apply(_keep_main_board)].copy()
         return filtered_df
     
     def get_top_stocks(self, df: pd.DataFrame, top_n: int = None) -> pd.DataFrame:
@@ -388,4 +442,3 @@ class MainForceStockSelector:
 
 # 全局实例
 main_force_selector = MainForceStockSelector()
-

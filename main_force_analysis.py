@@ -29,7 +29,8 @@ class MainForceAnalyzer:
     
     def run_full_analysis(self, start_date: str = None, days_ago: int = None, 
                          final_n: int = None, max_range_change: float = None,
-                         min_market_cap: float = None, max_market_cap: float = None) -> Dict:
+                         min_market_cap: float = None, max_market_cap: float = None,
+                         main_board_only: bool = False) -> Dict:
         """
         运行完整的主力选股分析流程 - 整体批量分析
         
@@ -40,6 +41,7 @@ class MainForceAnalyzer:
             max_range_change: 最大涨跌幅限制
             min_market_cap: 最小市值限制
             max_market_cap: 最大市值限制
+            main_board_only: 是否仅保留6/0开头主板股票
             
         Returns:
             分析结果字典
@@ -56,7 +58,8 @@ class MainForceAnalyzer:
                 'final_n': final_n,
                 'max_range_change': max_range_change,
                 'min_market_cap': min_market_cap,
-                'max_market_cap': max_market_cap
+                'max_market_cap': max_market_cap,
+                'main_board_only': main_board_only
             }
         }
         
@@ -70,7 +73,8 @@ class MainForceAnalyzer:
                 start_date=start_date,
                 days_ago=days_ago,
                 min_market_cap=min_market_cap,
-                max_market_cap=max_market_cap
+                max_market_cap=max_market_cap,
+                main_board_only=main_board_only
             )
             
             if not success:
@@ -84,7 +88,8 @@ class MainForceAnalyzer:
                 raw_data,
                 max_range_change=max_range_change,
                 min_market_cap=min_market_cap,
-                max_market_cap=max_market_cap
+                max_market_cap=max_market_cap,
+                main_board_only=main_board_only
             )
             
             result['filtered_stocks'] = len(filtered_data)

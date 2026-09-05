@@ -580,9 +580,9 @@ def display_scheduler_management():
         with col_b:
             max_workers = st.number_input(
                 "并行线程数",
-                min_value=2,
+                min_value=1,
                 max_value=10,
-                value=portfolio_scheduler.max_workers,
+                value=max(1, portfolio_scheduler.max_workers),
                 disabled=(analysis_mode == "sequential"),
                 help="仅在并行模式下生效"
             )
@@ -655,8 +655,35 @@ def display_scheduler_management():
         if st.button("🚀 立即执行一次", type="primary", width='content'):
             with st.spinner("正在执行持仓分析..."):
                 try:
-                    portfolio_scheduler.run_analysis_now()
-                    st.success("执行完成！请查看分析历史。")
+                    result = portfolio_scheduler.run_analysis_now()
+                    if isinstance(result, dict):
+                        if result.get("success"):
+                            st.success("执行完成！")
+                            c1, c2, c3, c4 = st.columns(4)
+                            with c1:
+                                st.metric("总计", result.get("analysis_total", 0))
+                            with c2:
+                                st.metric("成功", result.get("analysis_succeeded", 0))
+                            with c3:
+                                st.metric("失败", result.get("analysis_failed", 0))
+                            with c4:
+                                st.metric("UZI成功", result.get("uzi_success", 0))
+
+                            saved_ids = result.get("saved_ids") or []
+                            if saved_ids:
+                                st.info(f"已保存 {len(saved_ids)} 条持仓历史记录")
+
+                            sync_result = result.get("sync_result")
+                            if sync_result:
+                                st.info(
+                                    f"监测同步: 新增 {sync_result.get('added', 0)} / "
+                                    f"更新 {sync_result.get('updated', 0)} / "
+                                    f"失败 {sync_result.get('failed', 0)}"
+                                )
+                        else:
+                            st.error(f"执行失败: {result.get('error', '未知错误')}")
+                    else:
+                        st.success("执行完成！请查看分析历史。")
                 except Exception as e:
                     st.error(f"执行失败: {str(e)}")
     

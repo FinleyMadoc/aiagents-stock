@@ -18,6 +18,8 @@ from notification_service import NotificationService
 
 class PortfolioScheduler:
     """持仓分析定时调度器"""
+
+    WEEKDAY_JOBS = ("monday", "tuesday", "wednesday", "thursday", "friday")
     
     def __init__(self):
         """初始化调度器"""
@@ -27,6 +29,7 @@ class PortfolioScheduler:
         self.thread = None
         self.last_run_time = None
         self.next_run_time = None
+        self.last_run_summary = None
         self.auto_monitor_sync = True  # 默认启用自动监测同步
         self.notification_enabled = True  # 默认启用通知
         self.selected_agents = None  # None表示全部分析师
@@ -201,6 +204,17 @@ class PortfolioScheduler:
         print("\n" + "="*60)
         print(f"定时分析开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*60 + "\n")
+        summary = {
+            "success": False,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "analysis_total": 0,
+            "analysis_succeeded": 0,
+            "analysis_failed": 0,
+            "saved_ids": [],
+            "uzi_success": 0,
+            "sync_result": None,
+            "error": None,
+        }
         
         try:
             # 1. 执行批量分析
@@ -214,13 +228,19 @@ class PortfolioScheduler:
             if not analysis_results.get("success"):
                 error_msg = analysis_results.get("error", "未知错误")
                 print(f"[ERROR] 批量分析失败: {error_msg}")
+                summary["error"] = error_msg
                 
                 # 发送错误通知
                 if self.notification_enabled:
                     self._send_error_notification(error_msg)
                 
                 self.last_run_time = datetime.now()
-                return
+                self.last_run_summary = summary
+                return summary
+
+            summary["analysis_total"] = analysis_results.get("total", 0)
+            summary["analysis_succeeded"] = analysis_results.get("succeeded", 0)
+            summary["analysis_failed"] = analysis_results.get("failed", 0)
             
             # 2. 执行 new-skill-uzi 默认分析
             if self.run_uzi_skill:
@@ -230,6 +250,7 @@ class PortfolioScheduler:
                 self.last_uzi_results = uzi_results
                 uzi_success_count = sum(1 for item in uzi_results if item.get("success"))
                 print(f"[OK] new-skill-uzi 完成: {uzi_success_count}/{len(uzi_results)}")
+                summary["uzi_success"] = uzi_success_count
             else:
                 print("\n[2/5] 跳过 new-skill-uzi（已禁用）")
                 analysis_results["uzi_results"] = []
@@ -239,6 +260,7 @@ class PortfolioScheduler:
             print("\n[3/5] 保存分析结果...")
             saved_ids = portfolio_manager.save_analysis_results(analysis_results)
             print(f"[OK] 保存 {len(saved_ids)} 条分析记录")
+            summary["saved_ids"] = saved_ids
             
             # 4. 自动监测同步
             sync_result = None
@@ -247,6 +269,7 @@ class PortfolioScheduler:
                 sync_result = self._sync_to_monitor(analysis_results)
             else:
                 print("\n[4/5] 跳过监测同步（已禁用）")
+            summary["sync_result"] = sync_result
             
             # 5. 发送通知
             if self.notification_enabled:
@@ -257,20 +280,27 @@ class PortfolioScheduler:
             
             # 更新运行时间
             self.last_run_time = datetime.now()
+            summary["success"] = True
+            summary["finished_at"] = self.last_run_time.strftime("%Y-%m-%d %H:%M:%S")
+            self.last_run_summary = summary
             
             print("\n" + "="*60)
             print(f"定时分析完成: {self.last_run_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print("="*60 + "\n")
+            return summary
             
         except Exception as e:
             print(f"\n[ERROR] 定时任务执行异常: {str(e)}")
             traceback.print_exc()
+            summary["error"] = str(e)
             
             # 发送错误通知
             if self.notification_enabled:
                 self._send_error_notification(str(e))
             
             self.last_run_time = datetime.now()
+            self.last_run_summary = summary
+            return summary
 
     def _run_uzi_skill_for_portfolio(self, analysis_results: dict) -> list:
         """为持仓股票逐只运行 new-skill-uzi。"""
@@ -596,16 +626,17 @@ class PortfolioScheduler:
             schedule.cancel_job(job)
         
         for time_str in self.schedule_times:
-            job = schedule.every().day.at(time_str).do(self._scheduled_job)
-            job.tag('portfolio_analysis')
+            for weekday in self.WEEKDAY_JOBS:
+                job = getattr(schedule.every(), weekday).at(time_str).do(self._scheduled_job)
+                job.tag('portfolio_analysis', weekday)
         self._update_next_run_time()
-        print(f"[OK] 重新调度任务: 每天 {', '.join(self.schedule_times)}")
+        print(f"[OK] 重新调度任务: 周一到周五 {', '.join(self.schedule_times)}")
     
     def _update_next_run_time(self):
         """更新下次运行时间"""
-        jobs = schedule.jobs
+        jobs = [job for job in schedule.jobs if 'portfolio_analysis' in job.tags and getattr(job, 'next_run', None)]
         if jobs:
-            self.next_run_time = jobs[0].next_run
+            self.next_run_time = min(jobs, key=lambda job: job.next_run).next_run
         else:
             self.next_run_time = None
     
@@ -650,9 +681,10 @@ class PortfolioScheduler:
         print(f"[OK] 清除了 {len(jobs_to_remove)} 个旧的持仓任务")
         
         for time_str in self.schedule_times:
-            job = schedule.every().day.at(time_str).do(self._scheduled_job)
-            job.tag('portfolio_analysis')
-            print(f"[OK] 添加调度任务: 每天 {time_str}")
+            for weekday in self.WEEKDAY_JOBS:
+                job = getattr(schedule.every(), weekday).at(time_str).do(self._scheduled_job)
+                job.tag('portfolio_analysis', weekday)
+            print(f"[OK] 添加调度任务: 周一到周五 {time_str}")
         
         self._update_next_run_time()
         
@@ -662,7 +694,7 @@ class PortfolioScheduler:
         self.thread.start()
         
         print(f"\n[OK] 定时任务已启动")
-        print(f"    调度时间: {', '.join(self.schedule_times)}")
+        print(f"    调度时间: 周一到周五 {', '.join(self.schedule_times)}")
         print(f"    分析模式: {self.analysis_mode}")
         print(f"    持仓数量: {stock_count}只")
         if self.next_run_time:
@@ -716,8 +748,7 @@ class PortfolioScheduler:
             return False
         
         print("[OK] 立即执行持仓分析...")
-        self._scheduled_job()
-        return True
+        return self._scheduled_job()
     
     def get_status(self) -> dict:
         """
@@ -735,6 +766,7 @@ class PortfolioScheduler:
             "run_uzi_skill": self.run_uzi_skill,
             "last_run_time": self.last_run_time.strftime("%Y-%m-%d %H:%M:%S") if self.last_run_time else None,
             "next_run_time": self.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if self.next_run_time else None,
+            "last_run_summary": self.last_run_summary,
             "portfolio_count": portfolio_manager.get_stock_count()
         }
     
@@ -745,8 +777,11 @@ class PortfolioScheduler:
         Returns:
             下次运行时间字符串，格式"HH:MM"，如果未设置则返回None
         """
-        if self.next_run_time:
-            return self.next_run_time.strftime("%H:%M")
+        jobs = [job for job in schedule.jobs if 'portfolio_analysis' in job.tags and getattr(job, 'next_run', None)]
+        if jobs:
+            next_run = min(jobs, key=lambda job: job.next_run).next_run
+            self.next_run_time = next_run
+            return next_run.strftime("%H:%M")
         return None
     
     def update_config(self, schedule_time: str = None, analysis_mode: str = None,
@@ -806,7 +841,7 @@ class PortfolioScheduler:
         立即执行一次分析（UI友好方法名）
         
         Returns:
-            是否执行成功
+            执行结果摘要
         """
         return self.run_once()
 

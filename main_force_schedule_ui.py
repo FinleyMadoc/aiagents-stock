@@ -17,7 +17,7 @@ def display_main_force_schedule_page():
     """显示主力选股定时任务页面"""
 
     st.markdown("## ⏰ 主力选股定时任务")
-    st.caption("每天按设定时间自动执行主力选股，并把结果保存到本地数据库与报告目录。")
+    st.caption("仅在周一到周五按设定时间自动执行主力选股，并把结果保存到本地数据库与报告目录。")
 
     status = main_force_scheduler.get_status()
 
@@ -72,7 +72,7 @@ def display_task_config_section():
                         "运行时间",
                         value=current_time,
                         key=f"task_time_{task['id']}",
-                        format="HH:mm",
+                        format="24h",
                     )
                 with col_b:
                     enabled = st.checkbox(
@@ -113,6 +113,7 @@ def display_task_config_section():
                     st.caption(f"最小市值: {params.get('min_market_cap', 50.0)}亿")
                 with col_p5:
                     st.caption(f"最大市值: {params.get('max_market_cap', 5000.0)}亿")
+                st.caption(f"仅保留主板(6/0开头): {params.get('main_board_only', True)}")
 
     st.markdown("---")
 
@@ -147,7 +148,7 @@ def display_task_config_section():
                 step=1.0,
             )
 
-        col_d, col_e = st.columns(2)
+        col_d, col_e, col_f = st.columns(3)
         with col_d:
             min_market_cap = st.number_input(
                 "最小市值(亿)",
@@ -164,6 +165,12 @@ def display_task_config_section():
                 value=float(first_params.get("max_market_cap", 5000.0)),
                 step=10.0,
             )
+        with col_f:
+            main_board_only = st.checkbox(
+                "仅保留主板股票(6/0开头)",
+                value=bool(first_params.get("main_board_only", True)),
+                help="勾选后会过滤掉创业板、科创板、北交所等非6/0开头股票",
+            )
 
         if st.form_submit_button("应用到全部任务", type="primary"):
             params = {
@@ -173,6 +180,7 @@ def display_task_config_section():
                 "max_range_change": float(max_range_change),
                 "min_market_cap": float(min_market_cap),
                 "max_market_cap": float(max_market_cap),
+                "main_board_only": bool(main_board_only),
             }
             for task in tasks:
                 main_force_scheduler.update_task_params(task["id"], params)
@@ -184,7 +192,7 @@ def display_task_config_section():
     st.markdown("### 新增任务")
     col_new_1, col_new_2, col_new_3 = st.columns(3)
     with col_new_1:
-        new_time = st.time_input("新增时间", value=dt_time(9, 15), key="new_task_time", format="HH:mm")
+        new_time = st.time_input("新增时间", value=dt_time(9, 15), key="new_task_time", format="24h")
     with col_new_2:
         new_enabled = st.checkbox("新增后启用", value=True, key="new_task_enabled")
     with col_new_3:
@@ -296,4 +304,3 @@ def display_run_history_section():
                     height=240,
                     key=f"preview_report_{item['id']}",
                 )
-

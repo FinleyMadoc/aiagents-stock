@@ -9,9 +9,11 @@ import json
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 import os
+import shutil
 
 # 数据库文件路径
-DB_PATH = "portfolio_stocks.db"
+DB_PATH = os.path.join("data", "portfolio_stocks.db")
+LEGACY_DB_PATH = "portfolio_stocks.db"
 
 
 class PortfolioDB:
@@ -24,8 +26,28 @@ class PortfolioDB:
         Args:
             db_path: 数据库文件路径
         """
-        self.db_path = db_path
+        self.db_path = self._resolve_db_path(db_path)
         self._init_database()
+
+    def _resolve_db_path(self, db_path: str) -> str:
+        """将持仓数据库迁移到 data/ 下，避免容器重建丢失数据。"""
+        target_path = db_path
+        if not os.path.isabs(target_path):
+            target_path = os.path.normpath(target_path)
+
+        db_dir = os.path.dirname(target_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
+        legacy_path = LEGACY_DB_PATH
+        if target_path == DB_PATH and os.path.exists(legacy_path) and not os.path.exists(target_path):
+            try:
+                shutil.copy2(legacy_path, target_path)
+                print(f"[OK] 已将旧持仓数据库迁移到: {target_path}")
+            except Exception as e:
+                print(f"[WARN] 迁移旧持仓数据库失败: {e}")
+
+        return target_path
     
     def _get_connection(self) -> sqlite3.Connection:
         """获取数据库连接"""

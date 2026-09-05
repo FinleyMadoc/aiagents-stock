@@ -105,6 +105,7 @@ class MainForceScheduleDatabase:
             "max_range_change": 30.0,
             "min_market_cap": 50.0,
             "max_market_cap": 5000.0,
+            "main_board_only": True,
         }
 
     def ensure_default_tasks(self):

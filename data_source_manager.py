@@ -5,6 +5,7 @@
 
 import os
 import time
+import threading
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -73,7 +74,9 @@ class DataSourceManager:
                 
                 # 使用腾讯数据源（proxy.finance.qq.com），避免东方财富API屏蔽
                 tx_symbol = self._convert_to_tx_code(symbol)
-                df = ak.stock_zh_a_hist_tx(
+                df = self._call_with_timeout(
+                    ak.stock_zh_a_hist_tx,
+                    timeout_sec=25,
                     symbol=tx_symbol,
                     start_date=f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}",
                     end_date=f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}",
@@ -162,6 +165,29 @@ class DataSourceManager:
         # 两个数据源都失败
         print("❌ 所有数据源均获取失败")
         return None
+
+    def _call_with_timeout(self, func, timeout_sec=25, *args, **kwargs):
+        """在独立守护线程中执行函数，超时后放弃结果。"""
+        result = {}
+        error = {}
+
+        def runner():
+            try:
+                result["value"] = func(*args, **kwargs)
+            except Exception as e:
+                error["error"] = e
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join(timeout_sec)
+
+        if thread.is_alive():
+            raise TimeoutError(f"调用 {getattr(func, '__name__', 'unknown')} 超时 {timeout_sec}s")
+
+        if "error" in error:
+            raise error["error"]
+
+        return result.get("value")
     
     def get_stock_basic_info(self, symbol):
         """
@@ -476,4 +502,3 @@ class DataSourceManager:
 
 # 全局数据源管理器实例
 data_source_manager = DataSourceManager()
-

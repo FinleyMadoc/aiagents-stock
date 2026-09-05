@@ -19,6 +19,8 @@ from main_force_schedule_db import main_force_schedule_db
 class MainForceScheduler:
     """主力选股定时任务调度器"""
 
+    WEEKDAY_JOBS = ("monday", "tuesday", "wednesday", "thursday", "friday")
+
     def __init__(self):
         self.running = False
         self.thread = None
@@ -128,8 +130,12 @@ class MainForceScheduler:
             for task in self.get_tasks():
                 if not task.get("enabled", True):
                     continue
-                job = schedule.every().day.at(task["schedule_time"]).do(self._run_task_safe, task["id"])
-                job.tag("main_force_scheduler", task["task_key"])
+                for weekday in self.WEEKDAY_JOBS:
+                    job = getattr(schedule.every(), weekday).at(task["schedule_time"]).do(
+                        self._run_task_safe,
+                        task["id"],
+                    )
+                    job.tag("main_force_scheduler", task["task_key"], weekday)
 
     def _run_task_safe(self, task_id: int):
         if not self.analysis_lock.acquire(blocking=False):
@@ -164,6 +170,7 @@ class MainForceScheduler:
                 max_range_change=params.get("max_range_change", 30.0),
                 min_market_cap=params.get("min_market_cap", 50.0),
                 max_market_cap=params.get("max_market_cap", 5000.0),
+                main_board_only=params.get("main_board_only", True),
             )
 
             report_path = None
