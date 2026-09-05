@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Dict
 import time
 
+from database import db as analysis_db
 from portfolio_manager import portfolio_manager
 from portfolio_scheduler import portfolio_scheduler
 
@@ -768,6 +769,12 @@ def display_history_record(record: Dict):
     uzi_report_path = record.get("uzi_report_path", "")
     uzi_output_dir = record.get("uzi_output_dir", "")
     uzi_result_json = record.get("uzi_result_json", "")
+    full_record = None
+    if code:
+        try:
+            full_record = analysis_db.get_latest_record_by_symbol(code)
+        except Exception:
+            full_record = None
     
     # 评级颜色
     if "强烈买入" in rating or "买入" in rating:
@@ -805,7 +812,48 @@ def display_history_record(record: Dict):
         if summary:
             st.markdown("**分析摘要**")
             st.info(summary)
-        
+
+        if full_record:
+            st.markdown("**主分析完整报告**")
+            main_tabs = st.tabs(["总览", "分析师结果", "团队讨论", "最终决策"])
+
+            with main_tabs[0]:
+                stock_info = full_record.get("stock_info", {}) or {}
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.write(f"代码: {full_record.get('symbol', code)}")
+                    st.write(f"名称: {full_record.get('stock_name', name)}")
+                    st.write(f"周期: {full_record.get('period', '')}")
+                with col_b:
+                    st.write(f"分析时间: {full_record.get('analysis_date', '')}")
+                    st.write(f"记录ID: {full_record.get('id', '')}")
+                if stock_info:
+                    st.json(stock_info, expanded=False)
+
+            with main_tabs[1]:
+                agents_results = full_record.get("agents_results", {}) or {}
+                if agents_results:
+                    st.json(agents_results, expanded=False)
+                else:
+                    st.info("暂无分析师结果")
+
+            with main_tabs[2]:
+                discussion_result = full_record.get("discussion_result", {}) or {}
+                if discussion_result:
+                    if isinstance(discussion_result, dict):
+                        st.json(discussion_result, expanded=False)
+                    else:
+                        st.write(discussion_result)
+                else:
+                    st.info("暂无团队讨论内容")
+
+            with main_tabs[3]:
+                final_decision = full_record.get("final_decision", {}) or {}
+                if final_decision:
+                    st.json(final_decision, expanded=False)
+                else:
+                    st.info("暂无最终决策内容")
+
         if uzi_report_path or uzi_output_dir or uzi_result_json:
             st.markdown("**UZI 分析**")
             if uzi_report_path:
@@ -826,8 +874,8 @@ def display_history_record(record: Dict):
                 except Exception:
                     uzi_result = {}
                 if uzi_result:
-                    st.json(uzi_result, expanded=False)
+                    st.json(uzi_result, expanded=True)
                 if st.session_state.get(f"uzi_html_{record.get('id')}"):
-                    components.html(st.session_state[f"uzi_html_{record.get('id')}"], height=800, scrolling=True)
+                    components.html(st.session_state[f"uzi_html_{record.get('id')}"], height=1200, scrolling=True)
 
         st.caption(f"置信度: {confidence}%")

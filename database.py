@@ -134,6 +134,38 @@ class StockAnalysisDatabase:
             'final_decision': json.loads(record[8]) if record[8] else {},
             'created_at': record[9]
         }
+
+    def get_latest_record_by_symbol(self, symbol):
+        """根据股票代码获取最新一条完整分析记录"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                SELECT * FROM analysis_records
+                WHERE symbol = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ''', (symbol,))
+
+            record = cursor.fetchone()
+            if not record:
+                return None
+
+            return {
+                'id': record[0],
+                'symbol': record[1],
+                'stock_name': record[2],
+                'analysis_date': record[3],
+                'period': record[4],
+                'stock_info': json.loads(record[5]) if record[5] else {},
+                'agents_results': json.loads(record[6]) if record[6] else {},
+                'discussion_result': json.loads(record[7]) if record[7] else {},
+                'final_decision': json.loads(record[8]) if record[8] else {},
+                'created_at': record[9]
+            }
+        finally:
+            conn.close()
     
     def delete_record(self, record_id):
         """删除指定记录"""
