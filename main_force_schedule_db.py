@@ -287,8 +287,8 @@ class MainForceScheduleDatabase:
         schedule_time: str,
         status: str,
         message: str,
-        start_time: datetime,
-        end_time: datetime,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
         result: Dict = None,
         report_path: str = None,
     ) -> int:
@@ -296,7 +296,9 @@ class MainForceScheduleDatabase:
         recommendations = result.get("final_recommendations", []) or []
         total_stocks = int(result.get("total_stocks") or result.get("total_fetched") or 0)
         filtered_stocks = int(result.get("filtered_stocks") or result.get("filtered_count") or 0)
-        duration = (end_time - start_time).total_seconds() if end_time else 0
+        started_at = start_time or datetime.now()
+        finished_at = end_time or started_at
+        duration = max((finished_at - started_at).total_seconds(), 0) if finished_at and started_at else 0
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         cleaned_result = self._clean_value(result)
@@ -317,8 +319,8 @@ class MainForceScheduleDatabase:
                 schedule_time,
                 status,
                 message,
-                start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time else None,
+                started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                finished_at.strftime("%Y-%m-%d %H:%M:%S") if finished_at else None,
                 duration,
                 total_stocks,
                 filtered_stocks,

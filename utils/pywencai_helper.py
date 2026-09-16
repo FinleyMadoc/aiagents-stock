@@ -15,6 +15,12 @@ import sys
 import logging
 
 logger = logging.getLogger(__name__)
+_last_error = ""
+
+
+def get_last_error():
+    """Return the latest redacted pywencai failure reason for diagnostics."""
+    return _last_error
 
 
 def safe_get(query, loop=True, **kwargs):
@@ -31,11 +37,13 @@ def safe_get(query, loop=True, **kwargs):
     Returns:
         正常时返回 pywencai 结果，失败时返回 None
     """
-    import pywencai
+    global _last_error
+    _last_error = ""
 
     # 尝试1: 直接调用（快速路径）
     result = _try_call(query, loop, **kwargs)
     if result is not None:
+        _last_error = ""
         return result
 
     print(f"[pywencai] ⚠️ 直接调用失败，尝试浏览器会话...")
@@ -49,12 +57,24 @@ def safe_get(query, loop=True, **kwargs):
             kwargs_with_cookie['cookie'] = cookie_str
             result = _try_call(query, loop, **kwargs_with_cookie)
             if result is not None:
+                _last_error = ""
                 print(f"[pywencai] ✅ 浏览器会话成功，共获取 {len(result) if hasattr(result,'__len__') else '?'} 条数据")
                 return result
             else:
+                cookie_hint = (
+                    f"；已传入Cookie长度={len(cookie_str)}，但问财仍返回空响应，"
+                    "通常是Cookie失效、复制不完整、账号退出登录或服务器IP被拦截"
+                )
+                if _last_error:
+                    _last_error += cookie_hint
+                else:
+                    _last_error = "Cookie会话请求失败" + cookie_hint
                 print(f"[pywencai] ❌ 浏览器会话也失败，选股功能暂时不可用")
                 print(f"[pywencai] 💡 请用浏览器打开 https://www.iwencai.com/screener 并登录")
+        else:
+            _last_error = "未获取到 iwencai Cookie"
     except Exception as e:
+        _last_error = _redact_error(e)
         logger.debug(f"浏览器 cookies 方案也失败: {e}")
 
     return None
@@ -62,13 +82,32 @@ def safe_get(query, loop=True, **kwargs):
 
 def _try_call(query, loop=True, **kwargs):
     """内部调用 pywencai.get，捕获异常"""
+    global _last_error
     import pywencai
     try:
         result = pywencai.get(query=query, loop=loop, **kwargs)
         return result
     except AttributeError as e:
+        _last_error = _redact_error(e)
         logger.debug(f"pywencai 内部异常: {e}")
         return None
     except Exception as e:
+        _last_error = _redact_error(e)
         logger.debug(f"pywencai 调用异常: {type(e).__name__}: {e}")
         return None
+
+
+def _redact_error(error):
+    """Keep diagnostics useful while avoiding accidental Cookie leakage."""
+    message = f"{type(error).__name__}: {error}"
+    for key in (
+        "IWENCAI_COOKIE",
+        "IWENCAI_SESSION_COOKIE",
+        "IWENCAI_COOKIES",
+        "PYWENCAI_COOKIE",
+        "WENCAI_COOKIE",
+    ):
+        value = __import__("os").getenv(key, "").strip()
+        if value:
+            message = message.replace(value, "[REDACTED]")
+    return message[:500]

@@ -55,13 +55,16 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/ &&
     pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
     pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 
+# pywencai uses a real Chromium fallback when iwencai blocks direct requests.
+RUN python -m playwright install --with-deps chromium
+
 # 复制项目文件
 COPY . .
 
 # 如果项目根目录下带了 UZI-Skill-main，则一并安装它的依赖
 RUN if [ -f /app/UZI-Skill-main/requirements.txt ]; then \
         pip install --no-cache-dir --default-timeout=1000 -r /app/UZI-Skill-main/requirements.txt && \
-        python -m playwright install chromium; \
+        true; \
     fi
 
 # 创建必要的目录

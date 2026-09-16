@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 import re
 import time
-from utils.pywencai_helper import safe_get
+from utils.pywencai_helper import get_last_error, safe_get
 
 class MainForceStockSelector:
     """主力选股类"""
@@ -113,7 +113,10 @@ class MainForceStockSelector:
                     continue
             
             # 所有方案都失败
+            detail = get_last_error()
             error_msg = "所有查询方案都失败了，请检查网络或稍后重试"
+            if detail:
+                error_msg += f"（最后一次错误：{detail}）"
             print(f"\n❌ {error_msg}")
             return False, None, error_msg
         

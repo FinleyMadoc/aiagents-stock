@@ -141,7 +141,8 @@ class MainForceScheduler:
         if not self.analysis_lock.acquire(blocking=False):
             task = self._get_task(task_id)
             if task:
-                self._save_run(task, "skipped", "上一次任务尚未完成，跳过本次执行", None, None, None)
+                now = datetime.now()
+                self._save_run(task, "skipped", "上一次任务尚未完成，跳过本次执行", now, now, None)
             return
 
         try:

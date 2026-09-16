@@ -24,6 +24,7 @@ from longhubang_ui import display_longhubang
 from smart_monitor_ui import smart_monitor_ui
 from news_flow_ui import display_news_flow_monitor
 from uzi_skill_ui import display_new_skill_uzi
+from mainline_ui import display_mainline_analysis
 
 AUTH_USERNAME = "staff"
 AUTH_PASSWORD = "staff_jimmy"
@@ -540,7 +541,7 @@ def main():
         if st.button("🏠 股票分析", width='stretch', key="nav_home", help="返回首页，进行单只股票的深度分析"):
             # 清除所有功能页面标志
             for key in ['show_history', 'show_monitor', 'show_config', 'show_main_force',
-                       'show_main_force_scheduler', 'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis', 'show_value_stock', 'show_new_skill_uzi']:
+                       'show_main_force_scheduler', 'show_sector_strategy', 'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_cycle', 'show_macro_analysis', 'show_value_stock', 'show_new_skill_uzi', 'show_mainline']:
                 if key in st.session_state:
                     del st.session_state[key]
 
@@ -556,6 +557,12 @@ def main():
                            'show_longhubang', 'show_portfolio', 'show_low_price_bull', 'show_news_flow', 'show_macro_analysis', 'show_new_skill_uzi', 'show_main_force_scheduler']:
                     if key in st.session_state:
                         del st.session_state[key]
+
+            if st.button("🧭 A股主线", width='stretch', key="nav_mainline", help="主力资金、板块与国内外新闻综合研判"):
+                for key in list(st.session_state.keys()):
+                    if key.startswith("show_"):
+                        del st.session_state[key]
+                st.session_state.show_mainline = True
 
             if st.button("⏰ 主力任务", width='stretch', key="nav_main_force_scheduler", help="配置主力选股定时任务"):
                 st.session_state.show_main_force_scheduler = True
@@ -858,6 +865,10 @@ def main():
     # 检查是否显示 new-skill-uzi
     if 'show_new_skill_uzi' in st.session_state and st.session_state.show_new_skill_uzi:
         display_new_skill_uzi()
+        return
+
+    if 'show_mainline' in st.session_state and st.session_state.show_mainline:
+        display_mainline_analysis()
         return
 
     tabs = st.tabs(["股票分析", "new-skill-uzi"])
@@ -2321,10 +2332,80 @@ def display_config_manager():
         st.info("💡 如何获取Tushare Token？\n\n1. 访问 https://tushare.pro\n2. 注册账号\n3. 进入个人中心\n4. 获取Token\n5. 复制并粘贴到上方输入框")
 
         st.markdown("---")
+        st.markdown("### NewsAPI国际财经新闻（可选）")
+        st.caption(
+            "主线分析使用 NewsAPI 的 `/v2/everything` 搜索国际财经新闻。"
+            "密钥只保存到项目根目录 `.env`，不会显示完整内容。"
+        )
+
+        newsapi_key_info = config_info["NEWSAPI_API_KEY"]
+        current_newsapi_key = st.session_state.temp_config.get("NEWSAPI_API_KEY", "")
+        new_newsapi_key = st.text_input(
+            f"🔑 {newsapi_key_info['description']}",
+            value=current_newsapi_key,
+            type="password",
+            help="从 https://newsapi.org/ 获取 API Key",
+            key="input_newsapi_api_key",
+        )
+        st.session_state.temp_config["NEWSAPI_API_KEY"] = new_newsapi_key.strip()
+
+        newsapi_url_info = config_info["NEWSAPI_BASE_URL"]
+        current_newsapi_url = st.session_state.temp_config.get(
+            "NEWSAPI_BASE_URL", "https://newsapi.org/v2/everything"
+        )
+        new_newsapi_url = st.text_input(
+            f"🌐 {newsapi_url_info['description']}",
+            value=current_newsapi_url,
+            help="NewsAPI Everything 地址，通常无需修改",
+            key="input_newsapi_base_url",
+        )
+        st.session_state.temp_config["NEWSAPI_BASE_URL"] = new_newsapi_url.strip()
+
+        newsapi_timeout_info = config_info["INTERNATIONAL_NEWS_TIMEOUT"]
+        current_newsapi_timeout = st.session_state.temp_config.get(
+            "INTERNATIONAL_NEWS_TIMEOUT", "15"
+        )
+        new_newsapi_timeout = st.text_input(
+            f"⏱️ {newsapi_timeout_info['description']}",
+            value=current_newsapi_timeout,
+            key="input_international_news_timeout",
+        )
+        st.session_state.temp_config["INTERNATIONAL_NEWS_TIMEOUT"] = (
+            new_newsapi_timeout.strip() or "15"
+        )
+
+        if new_newsapi_key:
+            st.success("✅ NewsAPI密钥已配置")
+        else:
+            st.info("ℹ️ 未配置NewsAPI密钥，主线分析仍可使用国内新闻和其他数据源")
+
+        st.markdown("---")
         st.markdown("### 同花顺问财 iwencai（选股数据源）")
+        iwencai_cookie_info = config_info["IWENCAI_COOKIE"]
+        current_iwencai_cookie = st.session_state.temp_config.get(
+            "IWENCAI_COOKIE", ""
+        )
+        new_iwencai_cookie = st.text_input(
+            f"🍪 {iwencai_cookie_info['description']}",
+            value=current_iwencai_cookie,
+            type="password",
+            help=(
+                "粘贴浏览器开发者工具中 iwencai.com 请求的完整 Cookie 请求头内容；"
+                "不要粘贴 Set-Cookie。"
+            ),
+            key="input_iwencai_cookie",
+        )
+        st.session_state.temp_config["IWENCAI_COOKIE"] = (
+            new_iwencai_cookie.strip()
+        )
+        if new_iwencai_cookie.strip():
+            st.success("✅ 问财 Cookie 已配置（不会显示完整内容）")
+        else:
+            st.warning("⚠️ 未配置问财 Cookie，Docker 中的自动浏览器会话可能无法通过验证")
+
         st.markdown("""
         问财用于选股板块（主力选股、低价擒牛等）的数据查询。如遇到 **"所有查询方案都失败了"** 的错误，
-        请按以下步骤配置浏览器登录：
+        请配置有效的 Cookie：
         """)
         
         # iwencai 登录状态提示
@@ -2347,10 +2428,10 @@ def display_config_manager():
                         st.error(f"❌ 检测失败: {e}")
         with col_iw2:
             st.info("💡 **使用方法**\n\n"
-                    "1. 用浏览器打开 https://www.iwencai.com/screener\n"
-                    "2. 登录你的同花顺账号（右上角「登录」按钮）\n"
-                    "3. 保持浏览器登录状态即可\n\n"
-                    "系统会自动使用你的登录会话获取选股数据。")
+                    "1. 在浏览器登录 https://www.iwencai.com/screener\n"
+                    "2. 从 iwencai.com 请求的 Request Headers 复制 Cookie\n"
+                    "3. 粘贴到上方并保存配置\n\n"
+                    "本机浏览器的登录状态不会自动传到线上 Docker。")
 
     with tab3:
         st.markdown("### MiniQMT量化交易配置（可选）")
@@ -2659,16 +2740,32 @@ def display_config_manager():
     st.markdown("---")
     with st.expander("📄 查看当前 .env 文件内容"):
         current_config = config_manager.read_env()
+        def mask_secret(value):
+            value = str(value or "")
+            if len(value) <= 8:
+                return "***" if value else ""
+            return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+        deepseek_display_key = mask_secret(current_config.get("DEEPSEEK_API_KEY"))
+        newsapi_display_key = mask_secret(current_config.get("NEWSAPI_API_KEY"))
+        iwencai_display_cookie = mask_secret(current_config.get("IWENCAI_COOKIE"))
 
         st.code(f"""# AI股票分析系统环境配置
 # 由系统自动生成和管理
 
 # ========== DeepSeek API配置 ==========
-DEEPSEEK_API_KEY="{current_config.get('DEEPSEEK_API_KEY', '')}"
+DEEPSEEK_API_KEY="{deepseek_display_key}"
 DEEPSEEK_BASE_URL="{current_config.get('DEEPSEEK_BASE_URL', '')}"
 
 # ========== Tushare数据接口（可选）==========
 TUSHARE_TOKEN="{current_config.get('TUSHARE_TOKEN', '')}"
+
+# ========== NewsAPI国际财经新闻（可选）==========
+NEWSAPI_API_KEY="{newsapi_display_key}"
+NEWSAPI_BASE_URL="{current_config.get('NEWSAPI_BASE_URL', 'https://newsapi.org/v2/everything')}"
+INTERNATIONAL_NEWS_TIMEOUT="{current_config.get('INTERNATIONAL_NEWS_TIMEOUT', '15')}"
+INTERNATIONAL_NEWS_QUERY="{current_config.get('INTERNATIONAL_NEWS_QUERY', '')}"
+IWENCAI_COOKIE="{iwencai_display_cookie}"
 
 # ========== MiniQMT量化交易配置（可选）==========
 MINIQMT_ENABLED="{current_config.get('MINIQMT_ENABLED', 'false')}"

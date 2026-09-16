@@ -1,0 +1,4 @@
+interface:
+  display_name: "A股主线研判"
+  short_description: "结合资金流、板块和国内外新闻识别A股周月主线并生成股票池"
+  default_prompt: "分析当前A股本周与本月主线，结合主力资金、行业/概念板块、国内新闻和NewsAPI国际新闻，分别输出周/月主线及每板块最多10只6/3开头候选股。"

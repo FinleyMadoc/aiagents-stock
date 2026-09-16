@@ -32,11 +32,67 @@ class ConfigManager:
                 "required": False,
                 "type": "text"
             },
+            "MAINLINE_THINKING_MODE": {
+                "value": "false",
+                "description": "A股主线默认启用思考模式",
+                "required": False,
+                "type": "select",
+                "options": ["false", "true"]
+            },
+            "MAINLINE_REASONING_EFFORT": {
+                "value": "high",
+                "description": "A股主线思考强度",
+                "required": False,
+                "type": "select",
+                "options": ["low", "high", "max"]
+            },
+            "MAINLINE_HISTORY_DIR": {
+                "value": "data/mainline/history",
+                "description": "A股主线分析历史记录目录",
+                "required": False,
+                "type": "text"
+            },
+            "MAINLINE_HISTORY_LIMIT": {
+                "value": "100",
+                "description": "A股主线分析最多保留的历史记录数",
+                "required": False,
+                "type": "text"
+            },
             "TUSHARE_TOKEN": {
                 "value": "",
                 "description": "Tushare数据接口Token（可选）",
                 "required": False,
                 "type": "password"
+            },
+            "NEWSAPI_API_KEY": {
+                "value": "",
+                "description": "NewsAPI国际财经新闻密钥（可选）",
+                "required": False,
+                "type": "password"
+            },
+            "IWENCAI_COOKIE": {
+                "value": "",
+                "description": "同花顺问财会话Cookie（可选）",
+                "required": False,
+                "type": "password"
+            },
+            "NEWSAPI_BASE_URL": {
+                "value": "https://newsapi.org/v2/everything",
+                "description": "NewsAPI地址",
+                "required": False,
+                "type": "text"
+            },
+            "INTERNATIONAL_NEWS_TIMEOUT": {
+                "value": "15",
+                "description": "国际新闻请求超时（秒）",
+                "required": False,
+                "type": "text"
+            },
+            "INTERNATIONAL_NEWS_QUERY": {
+                "value": "",
+                "description": "国际新闻查询语句（可选）",
+                "required": False,
+                "type": "text"
             },
             "UZI_SKILL_ROOT": {
                 "value": "",
@@ -228,11 +284,34 @@ class ConfigManager:
             lines.append(f'DEEPSEEK_API_KEY="{full_config.get("DEEPSEEK_API_KEY", "")}"')
             lines.append(f'DEEPSEEK_BASE_URL="{full_config.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")}"')
             lines.append(f'DEFAULT_MODEL_NAME="{full_config.get("DEFAULT_MODEL_NAME", "deepseek-chat")}"')
+            lines.append(
+                f'MAINLINE_THINKING_MODE="{full_config.get("MAINLINE_THINKING_MODE", "false")}"'
+            )
+            lines.append(
+                f'MAINLINE_REASONING_EFFORT="{full_config.get("MAINLINE_REASONING_EFFORT", "high")}"'
+            )
+            lines.append(
+                f'MAINLINE_HISTORY_DIR="{full_config.get("MAINLINE_HISTORY_DIR", "data/mainline/history")}"'
+            )
+            lines.append(
+                f'MAINLINE_HISTORY_LIMIT="{full_config.get("MAINLINE_HISTORY_LIMIT", "100")}"'
+            )
             lines.append("")
             
             # 数据接口配置
             lines.append("# ========== 数据接口配置（可选）==========")
             lines.append(f'TUSHARE_TOKEN="{full_config.get("TUSHARE_TOKEN", "")}"')
+            lines.append(f'NEWSAPI_API_KEY="{full_config.get("NEWSAPI_API_KEY", "")}"')
+            lines.append(f'IWENCAI_COOKIE="{full_config.get("IWENCAI_COOKIE", "")}"')
+            lines.append(
+                f'NEWSAPI_BASE_URL="{full_config.get("NEWSAPI_BASE_URL", "https://newsapi.org/v2/everything")}"'
+            )
+            lines.append(
+                f'INTERNATIONAL_NEWS_TIMEOUT="{full_config.get("INTERNATIONAL_NEWS_TIMEOUT", "15")}"'
+            )
+            lines.append(
+                f'INTERNATIONAL_NEWS_QUERY="{full_config.get("INTERNATIONAL_NEWS_QUERY", "")}"'
+            )
             lines.append(f'UZI_SKILL_ROOT="{full_config.get("UZI_SKILL_ROOT", "")}"')
             lines.append(f'UZI_REPORT_ROOT="{full_config.get("UZI_REPORT_ROOT", "data/uzi-reports")}"')
             lines.append(f'UZI_DEFAULT_DEPTH="{full_config.get("UZI_DEFAULT_DEPTH", "medium")}"')
@@ -270,7 +349,12 @@ class ConfigManager:
             # 保留其他非标准自定义键
             written_keys = {
                 "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEFAULT_MODEL_NAME",
-                "TUSHARE_TOKEN", "UZI_SKILL_ROOT", "UZI_REPORT_ROOT", "UZI_DEFAULT_DEPTH", "UZI_DEFAULT_SCHOOL",
+                "MAINLINE_THINKING_MODE", "MAINLINE_REASONING_EFFORT",
+                "MAINLINE_HISTORY_DIR", "MAINLINE_HISTORY_LIMIT",
+                "TUSHARE_TOKEN", "NEWSAPI_API_KEY", "NEWSAPI_BASE_URL",
+                "IWENCAI_COOKIE",
+                "INTERNATIONAL_NEWS_TIMEOUT", "INTERNATIONAL_NEWS_QUERY",
+                "UZI_SKILL_ROOT", "UZI_REPORT_ROOT", "UZI_DEFAULT_DEPTH", "UZI_DEFAULT_SCHOOL",
                 "TDX_BASE_URL", "YDC_API_KEY", "YDC_RESEARCH_EFFORT",
                 "MINIQMT_ENABLED", "MINIQMT_ACCOUNT_ID", "MINIQMT_HOST", "MINIQMT_PORT",
                 "EMAIL_ENABLED", "SMTP_SERVER", "SMTP_PORT", "EMAIL_FROM", "EMAIL_PASSWORD", "EMAIL_TO",
@@ -326,9 +410,23 @@ class ConfigManager:
     
     def reload_config(self):
         """重新加载配置（重新加载.env文件）"""
+        import importlib
         from dotenv import load_dotenv
+        runtime_newsapi_key = os.getenv("NEWSAPI_API_KEY", "").strip()
+        runtime_iwencai_cookie = os.getenv("IWENCAI_COOKIE", "").strip()
         # 强制覆盖已存在的环境变量
         load_dotenv(override=True)
+        if runtime_newsapi_key:
+            os.environ["NEWSAPI_API_KEY"] = runtime_newsapi_key
+        if runtime_iwencai_cookie:
+            os.environ["IWENCAI_COOKIE"] = runtime_iwencai_cookie
+        # Streamlit keeps imported modules alive across reruns.
+        try:
+            import config
+
+            importlib.reload(config)
+        except ImportError:
+            pass
 
 
 # 全局配置管理器实例

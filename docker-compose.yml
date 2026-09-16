@@ -1,11 +1,11 @@
-version: '3.8'
-
 services:
   agentsstock:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: agentsstock1
+    env_file:
+      - .env
     ports:
       - "8503:8503"
     volumes:
@@ -29,4 +29,3 @@ services:
 networks:
   agentsstock-network:
     driver: bridge
-

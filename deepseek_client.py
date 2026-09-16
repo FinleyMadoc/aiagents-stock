@@ -13,23 +13,54 @@ class DeepSeekClient:
             base_url=config.DEEPSEEK_BASE_URL
         )
         
-    def call_api(self, messages: List[Dict[str, str]], model: Optional[str] = None, 
-                 temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def call_api(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        include_reasoning: bool = True,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """调用DeepSeek API"""
         # 使用实例的模型，如果没有传入则使用默认模型
         model_to_use = model or self.model
-        
+        model_is_reasoner = "reasoner" in model_to_use.lower()
+        thinking_explicit = thinking is not None
+        thinking_enabled = model_is_reasoner if thinking is None else bool(thinking)
+
         # 对于 reasoner 模型，自动增加 max_tokens
         if "reasoner" in model_to_use.lower() and max_tokens <= 2000:
             max_tokens = 8000  # reasoner 模型需要更多 tokens 来输出推理过程
-        
+
         try:
-            response = self.client.chat.completions.create(
-                model=model_to_use,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
+            request_kwargs = {
+                "model": model_to_use,
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+            if thinking_enabled:
+                # DeepSeek thinking mode uses extra_body in OpenAI-compatible
+                # Chat Completions. It does not use temperature.
+                request_kwargs["extra_body"] = {
+                    "thinking": {"type": "enabled"}
+                }
+                if reasoning_effort in {"low", "high", "max"}:
+                    request_kwargs["reasoning_effort"] = reasoning_effort
+            else:
+                request_kwargs["temperature"] = temperature
+                if thinking_explicit:
+                    # DeepSeek V4 defaults to thinking mode. Send an explicit
+                    # disabled flag when the caller turns it off.
+                    request_kwargs["extra_body"] = {
+                        "thinking": {"type": "disabled"}
+                    }
+            if response_format:
+                request_kwargs["response_format"] = response_format
+
+            response = self.client.chat.completions.create(**request_kwargs)
             
             # 处理 reasoner 模型的响应
             message = response.choices[0].message
@@ -39,7 +70,7 @@ class DeepSeekClient:
             result = ""
             
             # 检查是否有推理内容
-            if hasattr(message, 'reasoning_content') and message.reasoning_content:
+            if include_reasoning and hasattr(message, 'reasoning_content') and message.reasoning_content:
                 result += f"【推理过程】\n{message.reasoning_content}\n\n"
             
             # 添加最终内容

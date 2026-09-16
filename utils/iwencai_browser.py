@@ -17,8 +17,9 @@ iwencai 浏览器会话模块
     result = pywencai.get(query=..., cookie=cookies)
 """
 
-import time
 import logging
+import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,32 @@ logger = logging.getLogger(__name__)
 _cookie_cache = None
 _cookie_time = 0
 _COOKIE_TTL = 300  # 5秒后重新获取
+_COOKIE_ENV_NAMES = (
+    "IWENCAI_COOKIE",
+    "IWENCAI_SESSION_COOKIE",
+    "IWENCAI_COOKIES",
+    "PYWENCAI_COOKIE",
+    "WENCAI_COOKIE",
+)
+
+
+def _configured_cookie():
+    """Read a manually exported iwencai cookie without exposing its value."""
+    try:
+        from dotenv import load_dotenv
+
+        # Direct CLI usage may import this helper without importing config.py.
+        load_dotenv(override=False)
+    except Exception:
+        pass
+
+    for name in _COOKIE_ENV_NAMES:
+        value = os.getenv(name, "").strip()
+        if value:
+            if value.lower().startswith("cookie:"):
+                value = value.split(":", 1)[1].strip()
+            return value, name
+    return "", ""
 
 
 def get_browser_cookies(force_refresh=False):
@@ -43,6 +70,16 @@ def get_browser_cookies(force_refresh=False):
               失败时返回空字符串。
     """
     global _cookie_cache, _cookie_time
+
+    configured_cookie, configured_name = _configured_cookie()
+    if configured_cookie:
+        _cookie_cache = configured_cookie
+        _cookie_time = time.time()
+        print(
+            f"[iwencai] 使用环境变量 {configured_name} 中的会话 cookie "
+            f"(长度 {len(configured_cookie)})"
+        )
+        return configured_cookie
     
     # 如果缓存还在有效期内，直接返回
     now = time.time()
