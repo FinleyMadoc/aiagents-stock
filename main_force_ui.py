@@ -144,7 +144,7 @@ def display_main_force_selector():
                 final_n=final_n,
                 max_range_change=max_change,
                 min_market_cap=min_cap,
-                max_market_cap=max_cap
+                max_market_cap=max_cap,
             )
 
             # 保存结果到session_state
@@ -987,4 +987,3 @@ def display_main_force_batch_results(batch_results):
 
         df_failed = pd.DataFrame(failed_data)
         st.dataframe(df_failed, width='content')
-

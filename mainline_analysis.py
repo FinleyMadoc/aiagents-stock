@@ -3,8 +3,10 @@
 """A-share weekly/monthly mainline analysis.
 
 This module combines:
-- pywencai through ``main_force_selector`` for stock-level main-force flow;
-- AkShare through ``SectorStrategyDataFetcher`` for sectors and market breadth;
+- the Fuyao/同花顺 financial REST API for prices, sectors, concepts and sentiment;
+- pywencai through ``main_force_selector`` for stock-level main-force flow because
+  the documented capital-flow capability is not yet open to external clients;
+- AkShare through ``SectorStrategyDataFetcher`` as a compatibility fallback;
 - domestic 7x24 finance news through AkShare;
 - NewsAPI through ``InternationalNewsFetcher`` for international news.
 
@@ -28,10 +30,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
+import requests
 
 from international_news import InternationalNewsFetcher
+from utils.iwencai_skillhub import IwencaiSkillHubClient, IwencaiSkillHubError
 
 logger = logging.getLogger(__name__)
+
+
+def _log_skillhub_raw_enabled() -> bool:
+    return os.getenv("IWENCAI_SKILL_LOG_RAW", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 MAINLINE_SYSTEM_PROMPT = """你是一名中国A股顶级市场结构研究员，拥有15年以上市场交易与盘面分析经验，深度理解以下体系：
@@ -193,6 +206,106 @@ def _records(value: Any, limit: int = 200) -> List[Dict[str, Any]]:
     return []
 
 
+def _stringify_field(value: Any) -> Any:
+    if isinstance(value, (list, tuple, set)):
+        return "、".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return value
+
+
+def _normalized_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            str(key): _stringify_field(value)
+            for key, value in row.items()
+        }
+        for row in (records or [])
+        if isinstance(row, dict)
+    ]
+
+
+class FuyaoAPIError(RuntimeError):
+    """Raised when the Fuyao API returns an HTTP or business-level error."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: Optional[int] = None,
+        request_id: str = "",
+        status_code: Optional[int] = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.request_id = request_id
+        self.status_code = status_code
+
+
+class FuyaoFinancialClient:
+    """Small client for the REST contract documented in ``ask/llms-full.txt``."""
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "https://fuyao.aicubes.cn",
+        timeout: float = 15,
+        session: Any = None,
+    ):
+        self.api_key = str(api_key or "").strip()
+        self.base_url = str(base_url or "https://fuyao.aicubes.cn").rstrip("/")
+        self.timeout = max(float(timeout), 1.0)
+        self.session = session or requests.Session()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key)
+
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.enabled:
+            raise FuyaoAPIError("FUYAO_API_KEY is not configured", code=2001)
+        url = f"{self.base_url}/{str(path).lstrip('/')}"
+        try:
+            response = self.session.get(
+                url,
+                params=params or {},
+                headers={"X-api-key": self.api_key, "Accept": "application/json"},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise FuyaoAPIError(f"request failed: {exc}") from exc
+        if response.status_code == 429:
+            raise FuyaoAPIError("rate limited", code=4001, status_code=429)
+        try:
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise FuyaoAPIError(
+                f"invalid HTTP response: {exc}", status_code=response.status_code
+            ) from exc
+        if not isinstance(payload, dict):
+            raise FuyaoAPIError("response is not a JSON object")
+        code = payload.get("code")
+        if code != 0:
+            raise FuyaoAPIError(
+                str(payload.get("message") or f"business error {code}"),
+                code=code if isinstance(code, int) else None,
+                request_id=str(payload.get("request_id") or ""),
+                status_code=response.status_code,
+            )
+        data = payload.get("data")
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise FuyaoAPIError("response data is not an object")
+        return data
+
+    def get_items(
+        self, path: str, params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        return _records(self.get(path, params).get("item", []), limit=10000)
+
+
 class MainlineAnalyzer:
     """Collect market evidence and produce the eight-section mainline report."""
 
@@ -202,6 +315,12 @@ class MainlineAnalyzer:
         sector_fetcher: Any = None,
         international_fetcher: Optional[InternationalNewsFetcher] = None,
         model: Optional[str] = None,
+        fuyao_client: Optional[FuyaoFinancialClient] = None,
+        fuyao_api_key: Optional[str] = None,
+        fuyao_base_url: Optional[str] = None,
+        fuyao_timeout: Optional[float] = None,
+        skillhub_client: Optional[IwencaiSkillHubClient] = None,
+        skillhub_enabled: Optional[bool] = None,
     ):
         self.selector = selector
         self.sector_fetcher = sector_fetcher
@@ -221,6 +340,56 @@ class MainlineAnalyzer:
                 self.international_fetcher = InternationalNewsFetcher()
         self._newsapi_only = False
         self.model = model
+        if fuyao_client is not None:
+            self.fuyao_client = fuyao_client
+        else:
+            try:
+                import config
+
+                configured_key = getattr(config, "FUYAO_API_KEY", "")
+                configured_url = getattr(
+                    config, "FUYAO_BASE_URL", "https://fuyao.aicubes.cn"
+                )
+                configured_timeout = getattr(config, "FUYAO_API_TIMEOUT", 15)
+            except Exception:
+                configured_key = ""
+                configured_url = "https://fuyao.aicubes.cn"
+                configured_timeout = 15
+            raw_timeout = (
+                fuyao_timeout
+                if fuyao_timeout is not None
+                else os.getenv("FUYAO_API_TIMEOUT", str(configured_timeout))
+            )
+            try:
+                parsed_timeout = float(raw_timeout)
+            except (TypeError, ValueError):
+                parsed_timeout = 15.0
+            self.fuyao_client = FuyaoFinancialClient(
+                api_key=(
+                    fuyao_api_key
+                    if fuyao_api_key is not None
+                    else os.getenv("FUYAO_API_KEY", configured_key)
+                ),
+                base_url=(
+                    fuyao_base_url
+                    or os.getenv("FUYAO_BASE_URL", configured_url)
+                ),
+                timeout=parsed_timeout,
+            )
+        self.skillhub_client = skillhub_client or IwencaiSkillHubClient()
+        configured_skillhub = os.getenv("IWENCAI_SKILLHUB_ENABLED", "true")
+        self.skillhub_enabled = (
+            skillhub_enabled
+            if skillhub_enabled is not None
+            else configured_skillhub.strip().lower() not in {"0", "false", "no", "off"}
+        )
+        logger.info(
+            "SkillHub initialization: enabled=%s api_key_configured=%s skills_dir=%s installed=%s",
+            self.skillhub_enabled,
+            self.skillhub_client.enabled,
+            self.skillhub_client.skills_dir,
+            self.skillhub_client.installation_status(),
+        )
 
     def collect_snapshot(
         self,
@@ -229,8 +398,17 @@ class MainlineAnalyzer:
         max_market_cap: float = 5000,
         international_query: Optional[str] = None,
         include_newsapi: bool = True,
+        include_skillhub: bool = True,
     ) -> Dict[str, Any]:
         """Collect all evidence. Individual source failures are isolated."""
+        logger.info(
+            "mainline collection start: include_skillhub=%s configured_enabled=%s "
+            "api_key_configured=%s installed=%s",
+            include_skillhub,
+            self.skillhub_enabled,
+            self.skillhub_client.enabled,
+            self.skillhub_client.installation_status(),
+        )
         now = datetime.now()
         weekly_start = now.replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -242,19 +420,44 @@ class MainlineAnalyzer:
             start_date=weekly_start.strftime("%Y年%m月%d日"),
             min_market_cap=min_market_cap,
             max_market_cap=max_market_cap,
+            include_skillhub=include_skillhub,
         )
         monthly = self._fetch_main_force(
             start_date=monthly_start.strftime("%Y年%m月%d日"),
             min_market_cap=min_market_cap,
             max_market_cap=max_market_cap,
+            include_skillhub=include_skillhub,
         )
-        domestic = self._fetch_domestic_market_data(domestic_news_days=7)
+        fuyao_domestic = self._fetch_fuyao_market_data()
+        if fuyao_domestic.get("success"):
+            official_market = fuyao_domestic.get("market_overview", {}) or {}
+            needs_market_fallback = (
+                not fuyao_domestic.get("sectors")
+                or not fuyao_domestic.get("concepts")
+                or official_market.get("up_ratio") is None
+            )
+            fallback_domestic = (
+                self._fetch_domestic_market_data(domestic_news_days=7)
+                if needs_market_fallback
+                else self._fetch_domestic_news_data(days=7)
+            )
+            domestic = self._merge_domestic_market_data(
+                fuyao_domestic, fallback_domestic
+            )
+        else:
+            domestic = self._fetch_domestic_market_data(domestic_news_days=7)
         international = self.international_fetcher.fetch(
             query=international_query,
             days=max(int(international_days), 1),
             max_records=50,
             include_newsapi=include_newsapi,
         )
+        skillhub = self._fetch_skillhub_context(
+            international_days=max(int(international_days), 1),
+            international_query=international_query,
+            enabled=include_skillhub,
+        )
+        self._merge_skillhub_context(domestic, international, skillhub)
 
         return {
             "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -271,26 +474,49 @@ class MainlineAnalyzer:
             "domestic_market": domestic,
             "international_news": international,
             "source_status": {
-                "pywencai_weekly": weekly.get("success", False),
-                "pywencai_monthly": monthly.get("success", False),
-                "akshare_market": domestic.get("success", False),
+                "fuyao_market": fuyao_domestic.get("success", False),
+                "pywencai_weekly": weekly.get("success", False)
+                and weekly.get("provider") != "iwencai-skillhub",
+                "pywencai_monthly": monthly.get("success", False)
+                and monthly.get("provider") != "iwencai-skillhub",
+                "akshare_market": bool(domestic.get("fallback_market_used"))
+                or domestic.get("provider") == "akshare",
                 "gdelt": self._provider_status(international, "gdelt"),
                 "newsapi": self._provider_status(international, "newsapi"),
+                "iwencai_skillhub": bool(
+                    skillhub.get("success")
+                    or weekly.get("provider") == "iwencai-skillhub"
+                    or monthly.get("provider") == "iwencai-skillhub"
+                ),
             },
             "source_diagnostics": {
+                "fuyao": fuyao_domestic.get("diagnostics", {}),
                 "pywencai_weekly": {
                     "status": "ok" if weekly.get("success") else "error",
+                    "provider": weekly.get("provider", "pywencai"),
                     "message": weekly.get("message", ""),
                     "count": weekly.get("count", 0),
+                    "code_count": weekly.get("code_count", weekly.get("count", 0)),
+                    "trace_id": weekly.get("trace_id", ""),
+                    "query": weekly.get("query", ""),
+                    "fields": weekly.get("fields", []),
+                    "preview": weekly.get("preview", {}),
                 },
                 "pywencai_monthly": {
                     "status": "ok" if monthly.get("success") else "error",
+                    "provider": monthly.get("provider", "pywencai"),
                     "message": monthly.get("message", ""),
                     "count": monthly.get("count", 0),
+                    "code_count": monthly.get("code_count", monthly.get("count", 0)),
+                    "trace_id": monthly.get("trace_id", ""),
+                    "query": monthly.get("query", ""),
+                    "fields": monthly.get("fields", []),
+                    "preview": monthly.get("preview", {}),
                 },
-                "akshare": domestic.get("diagnostics", {}),
+                "akshare": domestic.get("fallback_diagnostics", domestic.get("diagnostics", {})),
                 "gdelt": self._international_diagnostic(international, "gdelt"),
                 "newsapi": self._international_diagnostic(international, "newsapi"),
+                "iwencai_skillhub": skillhub.get("diagnostics", {}),
             },
         }
 
@@ -311,6 +537,30 @@ class MainlineAnalyzer:
             sector_stock_picks, limit=max(1, top_n)
         )
         fallback = self._build_fallback_analysis(snapshot, themes, recommendations)
+        processing_diagnostics = {
+            "weekly_records": len(
+                snapshot.get("main_force", {}).get("weekly", {}).get("records", [])
+            ),
+            "monthly_records": len(
+                snapshot.get("main_force", {}).get("monthly", {}).get("records", [])
+            ),
+            "weekly_themes": len(themes.get("weekly", [])),
+            "monthly_themes": len(themes.get("monthly", [])),
+            "weekly_sector_groups": len(sector_stock_picks.get("weekly", [])),
+            "monthly_sector_groups": len(sector_stock_picks.get("monthly", [])),
+            "recommendations": len(recommendations),
+        }
+        logger.info(
+            "mainline data flow: weekly_records=%d monthly_records=%d weekly_themes=%d "
+            "monthly_themes=%d weekly_groups=%d monthly_groups=%d recommendations=%d",
+            len(snapshot.get("main_force", {}).get("weekly", {}).get("records", [])),
+            len(snapshot.get("main_force", {}).get("monthly", {}).get("records", [])),
+            len(themes.get("weekly", [])),
+            len(themes.get("monthly", [])),
+            len(sector_stock_picks.get("weekly", [])),
+            len(sector_stock_picks.get("monthly", [])),
+            len(recommendations),
+        )
 
         analysis = fallback
         ai_used = False
@@ -326,6 +576,9 @@ class MainlineAnalyzer:
             if ai_analysis:
                 analysis = self._merge_analysis(fallback, ai_analysis)
                 ai_used = True
+                logger.info("mainline AI analysis: used=true thinking_mode=%s", thinking_mode)
+            else:
+                logger.warning("mainline AI analysis: no result; using deterministic fallback")
 
         return {
             "success": True,
@@ -338,6 +591,7 @@ class MainlineAnalyzer:
             "recommendations": recommendations,
             "sector_stock_picks": sector_stock_picks,
             "mainline_summary": self._build_mainline_summary(sector_stock_picks),
+            "processing_diagnostics": processing_diagnostics,
             "report": self.format_report(analysis, recommendations),
             "snapshot": _json_safe(snapshot),
         }
@@ -350,6 +604,7 @@ class MainlineAnalyzer:
         top_n: int = 10,
         include_ai: bool = True,
         include_newsapi: bool = True,
+        include_skillhub: bool = True,
         thinking_mode: bool = False,
         reasoning_effort: str = "high",
         international_query: Optional[str] = None,
@@ -363,6 +618,7 @@ class MainlineAnalyzer:
             max_market_cap=max_market_cap,
             international_query=international_query,
             include_newsapi=include_newsapi,
+            include_skillhub=include_skillhub,
         )
         result = self.analyze_snapshot(
             snapshot,
@@ -373,6 +629,7 @@ class MainlineAnalyzer:
         )
         if save_history:
             try:
+                import config
                 from mainline_history import MainlineHistoryStore
 
                 history_store = MainlineHistoryStore(
@@ -398,7 +655,29 @@ class MainlineAnalyzer:
         start_date: Optional[str],
         min_market_cap: float,
         max_market_cap: float,
+        include_skillhub: bool = True,
     ) -> Dict[str, Any]:
+        skillhub_result = (
+            self._fetch_skillhub_main_force(
+                start_date=start_date,
+                min_market_cap=min_market_cap,
+                max_market_cap=max_market_cap,
+            )
+            if include_skillhub
+            else {
+                "success": False,
+                "message": "SkillHub disabled for this run",
+            }
+        )
+        if skillhub_result.get("success"):
+            return skillhub_result
+        logger.warning(
+            "SkillHub astock-selector unavailable; falling back to pywencai: "
+            "start_date=%s include_skillhub=%s reason=%s",
+            start_date,
+            include_skillhub,
+            skillhub_result.get("message", "unknown"),
+        )
         try:
             if self.selector is None:
                 from main_force_selector import main_force_selector
@@ -419,10 +698,617 @@ class MainlineAnalyzer:
             logger.warning("pywencai main-force fetch failed (%s): %s", start_date, exc)
             return {
                 "success": False,
-                "message": str(exc),
+                "message": skillhub_result.get("message") or str(exc),
                 "count": 0,
                 "records": [],
             }
+
+    def _fetch_skillhub_main_force(
+        self,
+        start_date: Optional[str],
+        min_market_cap: float,
+        max_market_cap: float,
+    ) -> Dict[str, Any]:
+        if not self._skillhub_available(IwencaiSkillHubClient.STOCK_SKILL):
+            details = {
+                "configured_enabled": self.skillhub_enabled,
+                "api_key_configured": self.skillhub_client.enabled,
+                "skill_installed": self.skillhub_client.installed(
+                    IwencaiSkillHubClient.STOCK_SKILL
+                ),
+                "skills_dir": str(self.skillhub_client.skills_dir),
+            }
+            logger.warning("SkillHub astock-selector not available: %s", details)
+            return {
+                "success": False,
+                "provider": "iwencai-skillhub",
+                "message": "SkillHub A股选股技能未启用、未安装或缺少API Key",
+                "count": 0,
+                "records": [],
+                "availability": details,
+            }
+        query = (
+            f"{start_date or '本周'}以来主力资金净流入排名前100名，"
+            f"计算区间涨跌幅，市值{min_market_cap}-{max_market_cap}亿之间，"
+            "非ST、非科创板，列出股票代码、股票简称、所属同花顺行业、"
+            "区间主力资金净流入、区间涨跌幅、总市值、市盈率、市净率"
+        )
+        try:
+            payload = self.skillhub_client.select_stocks(query=query, limit=100)
+            records = _records(payload.get("datas", []), limit=1000)
+            fields = list(records[0].keys()) if records else []
+            preview = _json_safe(records[0]) if records else {}
+            logger.info(
+                "SkillHub astock-selector: start_date=%s count=%d code_count=%s "
+                "trace_id=%s fields=%s preview=%s",
+                start_date,
+                len(records),
+                payload.get("code_count", len(records)),
+                payload.get("trace_id", ""),
+                fields,
+                preview,
+            )
+            if _log_skillhub_raw_enabled():
+                logger.info(
+                    "SkillHub astock-selector raw data: start_date=%s data=%s",
+                    start_date,
+                    json.dumps(_json_safe(records), ensure_ascii=False),
+                )
+            return {
+                "success": bool(records),
+                "provider": "iwencai-skillhub",
+                "message": "同花顺问财 SkillHub A股选股",
+                "count": len(records),
+                "records": records,
+                "trace_id": payload.get("trace_id", ""),
+                "query": query,
+                "code_count": payload.get("code_count", len(records)),
+                "fields": fields,
+                "preview": preview,
+            }
+        except IwencaiSkillHubError as exc:
+            logger.warning("SkillHub main-force fetch failed (%s): %s", start_date, exc)
+            return {
+                "success": False,
+                "provider": "iwencai-skillhub",
+                "message": str(exc),
+                "count": 0,
+                "records": [],
+                "query": query,
+            }
+
+    def _skillhub_available(self, slug: str) -> bool:
+        return bool(
+            self.skillhub_enabled
+            and self.skillhub_client.enabled
+            and self.skillhub_client.installed(slug)
+        )
+
+    def _fetch_skillhub_context(
+        self,
+        international_days: int,
+        international_query: Optional[str],
+        enabled: bool,
+    ) -> Dict[str, Any]:
+        status = self.skillhub_client.installation_status()
+        diagnostics: Dict[str, Any] = {
+            "enabled": bool(enabled and self.skillhub_enabled),
+            "api_key_configured": self.skillhub_client.enabled,
+            "skills_dir": str(self.skillhub_client.skills_dir),
+            "installed": status,
+        }
+        result: Dict[str, Any] = {
+            "success": False,
+            "domestic_news": [],
+            "international_news": [],
+            "sector_rows": [],
+            "diagnostics": diagnostics,
+        }
+        if not enabled or not self.skillhub_enabled or not self.skillhub_client.enabled:
+            logger.warning(
+                "SkillHub context skipped: requested=%s configured_enabled=%s "
+                "api_key_configured=%s installed=%s",
+                enabled,
+                self.skillhub_enabled,
+                self.skillhub_client.enabled,
+                status,
+            )
+            return result
+
+        domestic_query = "最近7天中国A股政策、产业催化、公司公告和市场热点最新新闻"
+        international_search_query = international_query or (
+            f"最近{international_days}天国际宏观、地缘政治、能源、金属、"
+            "半导体、人工智能领域影响中国A股的最新新闻"
+        )
+        sector_query = (
+            "今日主力资金净流入排名靠前的行业板块和概念板块，"
+            "列出板块名称、主力资金净流入、涨跌幅、上涨家数和下跌家数"
+        )
+        calls = (
+            (
+                "domestic_news",
+                IwencaiSkillHubClient.NEWS_SKILL,
+                domestic_query,
+                lambda: self.skillhub_client.news_search(
+                    domestic_query,
+                    size=30,
+                ),
+            ),
+            (
+                "international_news",
+                IwencaiSkillHubClient.NEWS_SKILL,
+                international_search_query,
+                lambda: self.skillhub_client.news_search(
+                    international_search_query,
+                    size=30,
+                ),
+            ),
+            (
+                "sector_rows",
+                IwencaiSkillHubClient.SECTOR_SKILL,
+                sector_query,
+                lambda: self.skillhub_client.select_sectors(
+                    sector_query,
+                    limit=30,
+                ),
+            ),
+        )
+        for name, slug, query, callback in calls:
+            if not status.get(slug):
+                diagnostics[name] = {
+                    "status": "missing",
+                    "skill": slug,
+                    "query": query,
+                }
+                continue
+            try:
+                payload = callback()
+                if name.endswith("news"):
+                    rows = payload.get("articles", [])
+                else:
+                    rows = _records(payload.get("datas", []), limit=1000)
+                result[name] = rows
+                raw_payload = payload.get("raw", payload) if isinstance(payload, dict) else {}
+                fields = (
+                    list(rows[0].keys())
+                    if rows and isinstance(rows[0], dict)
+                    else []
+                )
+                preview = _json_safe(rows[0]) if rows else {}
+                diagnostics[name] = {
+                    "status": "ok" if rows else "empty",
+                    "skill": slug,
+                    "query": query,
+                    "count": len(rows),
+                    "code_count": raw_payload.get("code_count", len(rows))
+                    if isinstance(raw_payload, dict)
+                    else len(rows),
+                    "trace_id": raw_payload.get("trace_id", "")
+                    if isinstance(raw_payload, dict)
+                    else "",
+                    "fields": fields,
+                    "preview": preview,
+                }
+                logger.info(
+                    "SkillHub %s: status=%s count=%d trace_id=%s fields=%s preview=%s",
+                    name,
+                    diagnostics[name]["status"],
+                    len(rows),
+                    diagnostics[name]["trace_id"],
+                    fields,
+                    preview,
+                )
+                if _log_skillhub_raw_enabled():
+                    logger.info(
+                        "SkillHub %s raw data: %s",
+                        name,
+                        json.dumps(_json_safe(rows), ensure_ascii=False),
+                    )
+            except IwencaiSkillHubError as exc:
+                diagnostics[name] = {
+                    "status": "error",
+                    "skill": slug,
+                    "query": query,
+                    "message": str(exc),
+                }
+                logger.warning("SkillHub %s fetch failed: %s", name, exc)
+        result["success"] = any(
+            bool(result.get(key))
+            for key in ("domestic_news", "international_news", "sector_rows")
+        )
+        return result
+
+    def _merge_skillhub_context(
+        self,
+        domestic: Dict[str, Any],
+        international: Dict[str, Any],
+        skillhub: Dict[str, Any],
+    ) -> None:
+        if not skillhub.get("success"):
+            return
+        domestic["news"] = self._merge_news_rows(
+            skillhub.get("domestic_news", []), domestic.get("news", [])
+        )
+        international["articles"] = self._merge_news_rows(
+            skillhub.get("international_news", []),
+            international.get("articles", []),
+        )
+        if skillhub.get("international_news"):
+            sources = international.setdefault("sources", [])
+            sources.append(
+                {
+                    "source": "iwencai-skillhub",
+                    "enabled": True,
+                    "success": True,
+                    "count": len(skillhub["international_news"]),
+                }
+            )
+
+        sector_rows = self._normalize_skillhub_sector_rows(
+            skillhub.get("sector_rows", [])
+        )
+        if not sector_rows:
+            return
+        flow = domestic.get("sector_fund_flow")
+        if not isinstance(flow, dict):
+            flow = {}
+        flow["today"] = self._merge_named_rows(
+            sector_rows, flow.get("today", []), key="sector"
+        )
+        domestic["sector_fund_flow"] = flow
+        sectors = domestic.get("sectors")
+        if not isinstance(sectors, dict):
+            sectors = {}
+        for row in sector_rows:
+            name = str(row.get("sector", "") or "")
+            if name and name not in sectors:
+                sectors[name] = {
+                    "change_pct": row.get("change_pct", 0),
+                    "up_count": row.get("up_count", 0),
+                    "down_count": row.get("down_count", 0),
+                    "provider": "iwencai-skillhub",
+                }
+        domestic["sectors"] = sectors
+
+    @staticmethod
+    def _merge_news_rows(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for group in groups:
+            for row in group or []:
+                if not isinstance(row, dict):
+                    continue
+                key = (
+                    str(row.get("title", "") or "").strip(),
+                    str(row.get("url", "") or "").strip(),
+                )
+                if not key[0] or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(row)
+        return merged[:100]
+
+    @staticmethod
+    def _merge_named_rows(
+        primary: List[Dict[str, Any]],
+        fallback: List[Dict[str, Any]],
+        key: str,
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for row in [*(primary or []), *(fallback or [])]:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get(key, "") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            merged.append(row)
+        return merged
+
+    @classmethod
+    def _normalize_skillhub_sector_rows(
+        cls, rows: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        normalized = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            name = cls._record_text(
+                row, ("板块名称", "指数简称", "行业名称", "概念名称", "名称")
+            )
+            if not name:
+                continue
+            normalized.append(
+                {
+                    "sector": name,
+                    "main_net_inflow": cls._record_number(
+                        row,
+                        (
+                            "主力资金净流入",
+                            "主力净流入",
+                            "主力净买入额",
+                            "主力资金流向",
+                            "净流入",
+                            "净买入额",
+                        ),
+                    ),
+                    "change_pct": cls._record_number(row, ("涨跌幅",)),
+                    "up_count": cls._record_number(row, ("上涨家数",)),
+                    "down_count": cls._record_number(row, ("下跌家数",)),
+                    "provider": "iwencai-skillhub",
+                    "raw_data": row,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _record_text(row: Dict[str, Any], patterns: Sequence[str]) -> str:
+        for pattern in patterns:
+            for key, value in row.items():
+                if pattern in str(key) and value is not None and str(value).strip():
+                    return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _record_number(row: Dict[str, Any], patterns: Sequence[str]) -> float:
+        for pattern in patterns:
+            for key, value in row.items():
+                if pattern in str(key):
+                    return round(_to_number(value) or 0, 2)
+        return 0.0
+
+    @staticmethod
+    def _chunked(values: Sequence[str], size: int) -> Iterable[List[str]]:
+        step = max(int(size), 1)
+        for index in range(0, len(values), step):
+            yield list(values[index : index + step])
+
+    def _fetch_fuyao_market_data(self) -> Dict[str, Any]:
+        """Collect official market structure data using the documented REST API."""
+        client = self.fuyao_client
+        if not client.enabled:
+            return {
+                "success": False,
+                "provider": "fuyao",
+                "error": "FUYAO_API_KEY is not configured",
+                "diagnostics": {
+                    "authentication": {
+                        "status": "disabled",
+                        "message": "set FUYAO_API_KEY to enable the official API",
+                    }
+                },
+            }
+
+        diagnostics: Dict[str, Any] = {}
+
+        def call(name: str, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            try:
+                data = client.get(path, params)
+                diagnostics[name] = {
+                    "status": "ok",
+                    "count": len(data.get("item", []))
+                    if isinstance(data.get("item"), list)
+                    else 0,
+                    "timestamp": data.get("timestamp"),
+                }
+                return data
+            except FuyaoAPIError as exc:
+                diagnostics[name] = {
+                    "status": "error",
+                    "message": str(exc),
+                    "code": exc.code,
+                    "request_id": exc.request_id,
+                    "http_status": exc.status_code,
+                }
+                return {}
+
+        industry_catalog = call(
+            "industry_catalog",
+            "/api/a-share-index/catalog/ths-index-list",
+            {"tag": "industry"},
+        ).get("item", [])
+        concept_catalog = call(
+            "concept_catalog",
+            "/api/a-share-index/catalog/ths-index-list",
+            {"tag": "cn_concept"},
+        ).get("item", [])
+
+        def index_performance(
+            catalog: List[Dict[str, Any]], diagnostic_prefix: str
+        ) -> Dict[str, Dict[str, Any]]:
+            names = {
+                str(item.get("thscode") or ""): str(item.get("name") or "")
+                for item in catalog
+                if isinstance(item, dict) and item.get("thscode")
+            }
+            snapshots: List[Dict[str, Any]] = []
+            for chunk_index, codes in enumerate(self._chunked(list(names), 80), start=1):
+                data = call(
+                    f"{diagnostic_prefix}_snapshot_{chunk_index}",
+                    "/api/a-share-index/prices/snapshot",
+                    {"thscodes": ",".join(codes)},
+                )
+                snapshots.extend(_records(data.get("item", []), limit=10000))
+            return {
+                names.get(str(item.get("thscode") or ""), str(item.get("thscode") or "")): {
+                    "thscode": item.get("thscode"),
+                    "change_pct": _to_number(item.get("price_change_ratio_pct")) or 0,
+                    "last_price": _to_number(item.get("last_price")),
+                    "turnover": _to_number(item.get("turnover")),
+                    "volume": _to_number(item.get("volume")),
+                }
+                for item in snapshots
+                if isinstance(item, dict) and item.get("thscode")
+            }
+
+        sectors = index_performance(industry_catalog, "industry")
+        concepts = index_performance(concept_catalog, "concept")
+
+        stock_snapshots: List[Dict[str, Any]] = []
+        offset = 0
+        page_size = 500
+        total: Optional[int] = None
+        for page in range(1, 21):
+            data = call(
+                f"stock_snapshot_{page}",
+                "/api/a-share/prices/snapshot",
+                {"limit": page_size, "offset": offset},
+            )
+            items = _records(data.get("item", []), limit=page_size)
+            if not items:
+                break
+            stock_snapshots.extend(items)
+            total_value = data.get("total")
+            if isinstance(total_value, int):
+                total = total_value
+            offset += len(items)
+            if len(items) < page_size or (total is not None and offset >= total):
+                break
+
+        limit_up_data = call(
+            "limit_up_pool",
+            "/api/a-share/special-data/limit-up-pool",
+            {"page": 1, "size": 200, "sort_field": "continue_day_cnt", "sort_dir": "desc"},
+        )
+        limit_down_data = call(
+            "limit_down_pool",
+            "/api/a-share/special-data/limit-down-pool",
+            {"page": 1, "size": 200},
+        )
+        limit_break_data = call(
+            "limit_break_pool",
+            "/api/a-share/special-data/limit-break-pool",
+            {"page": 1, "size": 200, "sort_field": "open_times", "sort_dir": "desc"},
+        )
+        hot_stocks = call(
+            "hot_stock_list",
+            "/api/a-share/special-data/hot-stock-list",
+            {"period": "day"},
+        ).get("item", [])
+        skyrocket = call(
+            "skyrocket_list",
+            "/api/a-share/special-data/skyrocket-list",
+            {"period": "day"},
+        ).get("item", [])
+        ladder = call(
+            "limit_up_ladder", "/api/a-share/special-data/limit-up-ladder"
+        )
+
+        valid_changes = [
+            _to_number(item.get("price_change_ratio_pct"))
+            for item in stock_snapshots
+            if isinstance(item, dict)
+        ]
+        valid_changes = [value for value in valid_changes if value is not None]
+        up_count = sum(value > 0 for value in valid_changes)
+        down_count = sum(value < 0 for value in valid_changes)
+        flat_count = sum(value == 0 for value in valid_changes)
+
+        def pool_total(data: Dict[str, Any]) -> int:
+            pagination = data.get("pagination", {})
+            if isinstance(pagination, dict) and isinstance(pagination.get("total"), int):
+                return pagination["total"]
+            return len(data.get("item", [])) if isinstance(data.get("item"), list) else 0
+
+        market_overview = {
+            "up_count": up_count,
+            "down_count": down_count,
+            "flat_count": flat_count,
+            "up_ratio": round(up_count / len(valid_changes) * 100, 2)
+            if valid_changes
+            else None,
+            "limit_up": pool_total(limit_up_data),
+            "limit_down": pool_total(limit_down_data),
+            "limit_break": pool_total(limit_break_data),
+            "sample_size": len(valid_changes),
+            "market_total": total,
+        }
+        return {
+            "success": bool(sectors or concepts or stock_snapshots or limit_up_data),
+            "provider": "fuyao",
+            "sectors": sectors,
+            "concepts": concepts,
+            "sector_fund_flow": {},
+            "market_overview": market_overview,
+            "news": [],
+            "special_data": {
+                "limit_up_pool": _records(limit_up_data.get("item", []), limit=200),
+                "limit_down_pool": _records(limit_down_data.get("item", []), limit=200),
+                "limit_break_pool": _records(limit_break_data.get("item", []), limit=200),
+                "limit_up_ladder": _json_safe(ladder),
+                "hot_stock_list": _records(hot_stocks, limit=30),
+                "skyrocket_list": _records(skyrocket, limit=30),
+            },
+            "diagnostics": {
+                **diagnostics,
+                "capital_flow": {
+                    "status": "unavailable",
+                    "message": "the official documentation marks capital-flow as not open to external access",
+                },
+            },
+        }
+
+    def _fetch_domestic_news_data(self, days: int = 7) -> Dict[str, Any]:
+        """Supplement Fuyao with news and sector flow it cannot expose yet."""
+        try:
+            if self.sector_fetcher is None:
+                from sector_strategy_data import SectorStrategyDataFetcher
+
+                self.sector_fetcher = SectorStrategyDataFetcher()
+            sector_fund_flow, flow_diagnostic = self._call_domestic_method(
+                self.sector_fetcher, "_get_sector_fund_flow", {}
+            )
+            news, diagnostic = self._fetch_domestic_news_with_diagnostic(
+                self.sector_fetcher, days=days
+            )
+            return {
+                "sector_fund_flow": sector_fund_flow,
+                "news": news,
+                "diagnostics": {
+                    "sector_fund_flow": flow_diagnostic,
+                    "news": diagnostic,
+                },
+            }
+        except Exception as exc:
+            return {
+                "sector_fund_flow": {},
+                "news": [],
+                "diagnostics": {
+                    "news": {"status": "error", "message": str(exc)}
+                },
+            }
+
+    @staticmethod
+    def _merge_domestic_market_data(
+        official: Dict[str, Any], fallback: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        merged = dict(official)
+        merged["news"] = fallback.get("news", [])
+        fallback_market_used = False
+        for key in ("sectors", "concepts", "sector_fund_flow"):
+            if not merged.get(key) and fallback.get(key):
+                merged[key] = fallback[key]
+                fallback_market_used = True
+        official_overview = merged.get("market_overview", {}) or {}
+        fallback_overview = fallback.get("market_overview", {}) or {}
+        if fallback_overview:
+            overview = dict(fallback_overview)
+            overview.update(
+                {
+                    key: value
+                    for key, value in official_overview.items()
+                    if value is not None
+                }
+            )
+            if overview != official_overview:
+                fallback_market_used = True
+            merged["market_overview"] = overview
+        merged["fallback_market_used"] = fallback_market_used
+        if fallback_market_used:
+            merged["provider"] = "fuyao+akshare"
+        merged["fallback_diagnostics"] = fallback.get("diagnostics", {})
+        return merged
 
     def _fetch_domestic_market_data(self, domestic_news_days: int = 7) -> Dict[str, Any]:
         """Reuse the existing AkShare sector fetcher without triggering its AI research."""
@@ -454,6 +1340,7 @@ class MainlineAnalyzer:
             diagnostics["news"] = news_diagnostic
             return {
                 "success": any(bool(value) for value in data.values()),
+                "provider": "akshare",
                 "diagnostics": diagnostics,
                 **_json_safe(data),
             }
@@ -461,6 +1348,7 @@ class MainlineAnalyzer:
             logger.warning("AkShare domestic market fetch failed: %s", exc)
             return {
                 "success": False,
+                "provider": "akshare",
                 "error": str(exc),
                 "sectors": {},
                 "concepts": {},
@@ -643,7 +1531,8 @@ class MainlineAnalyzer:
     def _aggregate_force(self, records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         if not records:
             return {}
-        df = pd.DataFrame(records)
+        normalized = _normalized_records(records)
+        df = pd.DataFrame(normalized).drop_duplicates()
         industry_col = _first_column(
             df.columns,
             ("所属同花顺行业", "所属行业", "行业", "板块", "概念"),
@@ -665,6 +1554,11 @@ class MainlineAnalyzer:
         code_col = _first_column(df.columns, ("股票代码", "证券代码", "代码"))
         name_col = _first_column(df.columns, ("股票简称", "股票名称", "名称"))
         if not industry_col:
+            logger.warning(
+                "mainline aggregate_force: no industry column; fields=%s count=%d",
+                list(df.columns),
+                len(df),
+            )
             return {}
 
         grouped: Dict[str, Dict[str, Any]] = defaultdict(
@@ -698,6 +1592,12 @@ class MainlineAnalyzer:
         for item in grouped.values():
             if item["count"]:
                 item["avg_change"] /= item["count"]
+        logger.info(
+            "mainline aggregate_force: input=%d groups=%d fields=%s",
+            len(normalized),
+            len(grouped),
+            list(df.columns),
+        )
         return dict(grouped)
 
     def _score_themes(
@@ -1083,7 +1983,7 @@ class MainlineAnalyzer:
         records = [row for row in (records or []) if isinstance(row, dict)]
         if not records:
             return []
-        df = pd.DataFrame(records).drop_duplicates()
+        df = pd.DataFrame(_normalized_records(records)).drop_duplicates()
         industry_col = _first_column(
             df.columns, ("所属同花顺行业", "所属行业", "行业", "板块", "概念")
         )
@@ -1103,6 +2003,10 @@ class MainlineAnalyzer:
         code_col = _first_column(df.columns, ("股票代码", "证券代码", "代码"))
         name_col = _first_column(df.columns, ("股票简称", "股票名称", "名称"))
         cap_col = _first_column(df.columns, ("总市值", "市值"))
+        pe_col = _first_column(df.columns, ("市盈率", "PE", "pe"))
+        pb_col = _first_column(df.columns, ("市净率", "PB", "pb"))
+        profit_col = _first_column(df.columns, ("净利润",))
+        revenue_col = _first_column(df.columns, ("营业收入", "营收"))
         candidates: Dict[str, Dict[str, Any]] = {}
         for _, row in df.iterrows():
             symbol = self._clean_symbol(row.get(code_col, "") if code_col else "")
@@ -1131,6 +2035,18 @@ class MainlineAnalyzer:
                 "market_cap": round(
                     (_to_number(row.get(cap_col)) if cap_col else 0) or 0, 2
                 ),
+                "pe_ratio": round(
+                    (_to_number(row.get(pe_col)) if pe_col else 0) or 0, 2
+                ),
+                "pb_ratio": round(
+                    (_to_number(row.get(pb_col)) if pb_col else 0) or 0, 2
+                ),
+                "net_profit": round(
+                    (_to_number(row.get(profit_col)) if profit_col else 0) or 0, 2
+                ),
+                "revenue": round(
+                    (_to_number(row.get(revenue_col)) if revenue_col else 0) or 0, 2
+                ),
                 "mainline_alignment": 1,
                 "raw_data": _json_safe(row.to_dict()),
             }
@@ -1142,6 +2058,15 @@ class MainlineAnalyzer:
 
         scored = list(candidates.values())
         if not scored:
+            logger.warning(
+                "mainline rank_sector_stocks: sector=%s input=%d candidates=0 "
+                "industry_col=%s fund_col=%s code_col=%s",
+                sector,
+                len(records),
+                industry_col,
+                fund_col,
+                code_col,
+            )
             return []
         positive_scored = [
             item
@@ -1149,6 +2074,11 @@ class MainlineAnalyzer:
             if float(item["main_fund_inflow"] or 0) > 0
         ]
         if not positive_scored:
+            logger.warning(
+                "mainline rank_sector_stocks: sector=%s candidates=%d positive_fund=0",
+                sector,
+                len(scored),
+            )
             return []
         scored = positive_scored
         max_fund = max(
@@ -1230,7 +2160,8 @@ class MainlineAnalyzer:
     ) -> Dict[str, Any]:
         weekly = themes.get("weekly", [])
         monthly = themes.get("monthly", [])
-        market = snapshot.get("domestic_market", {}).get("market_overview", {}) or {}
+        domestic_market = snapshot.get("domestic_market", {}) or {}
+        market = domestic_market.get("market_overview", {}) or {}
         market_environment, environment_basis = self._market_environment(market)
         weekly_mainline = self._theme_descriptions(weekly[:3])
         monthly_mainline = self._theme_descriptions(monthly[:3])
@@ -1249,7 +2180,7 @@ class MainlineAnalyzer:
             },
             "secondary_hotspots": self._theme_descriptions(weekly[3:7]) or "暂未形成清晰次级热点",
             "core_anchors": recommendations[:5] or "当前没有足够的候选股票数据",
-            "emotion_cycle": self._emotion_cycle(market),
+            "emotion_cycle": self._emotion_cycle(domestic_market),
             "mainline_sustainability": self._sustainability(weekly[:5], monthly[:5]),
             "next_day_focus": self._next_day_focus(weekly[:3], recommendations, market),
             "one_line_conclusion": self._one_line_conclusion(
@@ -1330,10 +2261,21 @@ class MainlineAnalyzer:
         return basis
 
     @staticmethod
-    def _emotion_cycle(market: Dict[str, Any]) -> Dict[str, Any]:
+    def _emotion_cycle(domestic_market: Dict[str, Any]) -> Dict[str, Any]:
+        market = domestic_market.get("market_overview", domestic_market) or {}
+        special_data = domestic_market.get("special_data", {}) or {}
         up_ratio = _to_number(market.get("up_ratio"))
         limit_up = _to_number(market.get("limit_up"))
         limit_down = _to_number(market.get("limit_down"))
+        limit_break = _to_number(market.get("limit_break"))
+        ladder = special_data.get("limit_up_ladder", {}) or {}
+        ladder_items = ladder.get("item", []) if isinstance(ladder, dict) else []
+        max_board = 0
+        if ladder_items and isinstance(ladder_items[0], dict):
+            boards = ladder_items[0].get("boards", {}) or {}
+            for rows in boards.values() if isinstance(boards, dict) else []:
+                for row in rows if isinstance(rows, list) else []:
+                    max_board = max(max_board, int(_to_number(row.get("board_num")) or 0))
         if up_ratio is None:
             return {"stage": "数据不足", "basis": ["缺少涨跌家数、涨跌停和连板数据"]}
         if up_ratio >= 65 and (limit_up or 0) >= 40:
@@ -1344,13 +2286,21 @@ class MainlineAnalyzer:
             stage = "冰点/弱修复"
         else:
             stage = "震荡分化"
+        basis = [
+            f"上涨家数占比 {up_ratio:.1f}%",
+            f"涨停 {limit_up or 0:.0f} 家 / 跌停 {limit_down or 0:.0f} 家",
+        ]
+        if limit_break is not None:
+            denominator = (limit_up or 0) + limit_break
+            break_ratio = limit_break / denominator * 100 if denominator else 0
+            basis.append(f"炸板 {limit_break:.0f} 家，炸板率约 {break_ratio:.1f}%")
+        if max_board:
+            basis.append(f"最新连板高度 {max_board} 板")
+        if limit_break is None and not max_board:
+            basis.append("当前数据未覆盖连板高度和炸板率，结论需要次日盘面验证")
         return {
             "stage": stage,
-            "basis": [
-                f"上涨家数占比 {up_ratio:.1f}%",
-                f"涨停 {limit_up or 0:.0f} 家 / 跌停 {limit_down or 0:.0f} 家",
-                "当前数据未覆盖连板高度和炸板率，结论需要次日盘面验证",
-            ],
+            "basis": basis,
         }
 
     @staticmethod
@@ -1430,14 +2380,29 @@ class MainlineAnalyzer:
                 "windows": snapshot.get("windows"),
                 "source_status": snapshot.get("source_status"),
                 "market": snapshot.get("domestic_market", {}).get("market_overview", {}),
+                "special_data": snapshot.get("domestic_market", {}).get("special_data", {}),
                 "themes": themes,
                 "sector_stock_picks": sector_stock_picks,
                 "recommendations": recommendations,
                 "domestic_news": snapshot.get("domestic_market", {}).get("news", [])[:40],
                 "international_news": snapshot.get("international_news", {}).get("articles", [])[:40],
             }
+            logger.info(
+                "mainline AI input: thinking_mode=%s weekly_themes=%d monthly_themes=%d "
+                "weekly_groups=%d monthly_groups=%d recommendations=%d domestic_news=%d "
+                "international_news=%d",
+                thinking_mode,
+                len(themes.get("weekly", [])),
+                len(themes.get("monthly", [])),
+                len(sector_stock_picks.get("weekly", [])),
+                len(sector_stock_picks.get("monthly", [])),
+                len(recommendations),
+                len(context["domestic_news"]),
+                len(context["international_news"]),
+            )
             prompt = f"""请严格基于以下 JSON 数据分析本周和本月A股主线。
 不要补写输入中不存在的价格、涨停高度、成交额、新闻事实或股票代码。
+优先使用 special_data 中的涨跌停池、炸板池、连板天梯和热榜；
 如果数据没有连板高度、炸板率或成交额，请在依据中明确写数据不足。
 
 时间口径：
@@ -1616,6 +2581,11 @@ def main() -> int:
         help="思考强度：low/high/max",
     )
     parser.add_argument("--no-newsapi", action="store_true", help="不请求NewsAPI")
+    parser.add_argument(
+        "--no-skillhub",
+        action="store_true",
+        help="不调用已安装的问财 SkillHub 技能",
+    )
     parser.add_argument("--query", default=None, help="覆盖国际新闻查询语句")
     parser.add_argument("--output", default=None, help="保存完整JSON结果")
     parser.add_argument(
@@ -1631,6 +2601,7 @@ def main() -> int:
         top_n=args.top_n,
         include_ai=not args.no_ai,
         include_newsapi=not args.no_newsapi,
+        include_skillhub=not args.no_skillhub,
         thinking_mode=args.thinking,
         reasoning_effort=args.reasoning_effort,
         international_query=args.query,

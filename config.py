@@ -5,11 +5,17 @@ from dotenv import load_dotenv
 # stale/empty value in the mounted .env file.
 _runtime_newsapi_key = os.getenv("NEWSAPI_API_KEY", "").strip()
 _runtime_iwencai_cookie = os.getenv("IWENCAI_COOKIE", "").strip()
+_runtime_iwencai_api_key = os.getenv("IWENCAI_API_KEY", "").strip()
+_runtime_fuyao_api_key = os.getenv("FUYAO_API_KEY", "").strip()
 load_dotenv(override=True)
 if _runtime_newsapi_key:
     os.environ["NEWSAPI_API_KEY"] = _runtime_newsapi_key
 if _runtime_iwencai_cookie:
     os.environ["IWENCAI_COOKIE"] = _runtime_iwencai_cookie
+if _runtime_iwencai_api_key:
+    os.environ["IWENCAI_API_KEY"] = _runtime_iwencai_api_key
+if _runtime_fuyao_api_key:
+    os.environ["FUYAO_API_KEY"] = _runtime_fuyao_api_key
 
 # DeepSeek API配置
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
@@ -48,6 +54,23 @@ UZI_DEFAULT_SCHOOL = os.getenv("UZI_DEFAULT_SCHOOL", "")
 # International finance news used by the A-share mainline analyzer.
 NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY", "")
 IWENCAI_COOKIE = os.getenv("IWENCAI_COOKIE", "").strip()
+IWENCAI_API_KEY = os.getenv("IWENCAI_API_KEY", "").strip()
+IWENCAI_BASE_URL = os.getenv(
+    "IWENCAI_BASE_URL", "https://openapi.iwencai.com"
+).rstrip("/")
+IWENCAI_SKILLS_DIR = os.getenv("IWENCAI_SKILLS_DIR", "skills").strip() or "skills"
+IWENCAI_SKILLHUB_ENABLED = os.getenv(
+    "IWENCAI_SKILLHUB_ENABLED", "true"
+).strip().lower() == "true"
+IWENCAI_SKILL_LOG_RAW = os.getenv(
+    "IWENCAI_SKILL_LOG_RAW", "false"
+).strip().lower() == "true"
+try:
+    IWENCAI_SKILL_TIMEOUT = max(
+        int(os.getenv("IWENCAI_SKILL_TIMEOUT", "45")), 5
+    )
+except ValueError:
+    IWENCAI_SKILL_TIMEOUT = 45
 NEWSAPI_BASE_URL = os.getenv(
     "NEWSAPI_BASE_URL", "https://newsapi.org/v2/everything"
 )
@@ -58,6 +81,14 @@ INTERNATIONAL_NEWS_TIMEOUT = float(
     os.getenv("INTERNATIONAL_NEWS_TIMEOUT", "15")
 )
 INTERNATIONAL_NEWS_QUERY = os.getenv("INTERNATIONAL_NEWS_QUERY", "")
+
+# 同花顺金融数据 API（主线分析的官方市场数据源）
+FUYAO_API_KEY = os.getenv("FUYAO_API_KEY", "").strip()
+FUYAO_BASE_URL = os.getenv("FUYAO_BASE_URL", "https://fuyao.aicubes.cn").rstrip("/")
+try:
+    FUYAO_API_TIMEOUT = max(float(os.getenv("FUYAO_API_TIMEOUT", "15")), 1.0)
+except ValueError:
+    FUYAO_API_TIMEOUT = 15.0
 
 # 股票数据源配置
 DEFAULT_PERIOD = "1y"  # 默认获取1年数据

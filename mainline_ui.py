@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pandas as pd
 import streamlit as st
@@ -10,6 +11,10 @@ import streamlit as st
 import config
 from mainline_history import MainlineHistoryStore
 from mainline_analysis import MainlineAnalyzer
+
+
+logging.getLogger("mainline_analysis").setLevel(logging.INFO)
+logging.getLogger("utils.iwencai_skillhub").setLevel(logging.INFO)
 
 
 DISPLAY_SECTOR_COUNT = 5
@@ -65,6 +70,11 @@ def _render_sector_group(title: str, groups: list[dict]) -> None:
                 "原行业": item.get("industry"),
                 "主力资金": item.get("main_fund_inflow"),
                 "区间涨跌": item.get("range_change_pct"),
+                "总市值": item.get("market_cap"),
+                "市盈率": item.get("pe_ratio"),
+                "市净率": item.get("pb_ratio"),
+                "净利润": item.get("net_profit"),
+                "营业收入": item.get("revenue"),
                 "个股评分": item.get("score"),
             }
             for item in stocks
@@ -136,10 +146,10 @@ def display_mainline_analysis() -> None:
     st.title("A股主力板块")
     st.caption(
         "本周=周一以来资金，本月=当月1日起资金；国内/国际新闻均取近 7 日，"
-        "国际新闻仅使用 NewsAPI；股票仅保留 6 和 3 开头。"
+        "优先使用问财 SkillHub，并保留原有数据源作为降级；股票仅保留 6 和 3 开头。"
     )
 
-    option_col, effort_col = st.columns([1, 1])
+    option_col, effort_col, source_col = st.columns([1, 1, 1])
     with option_col:
         thinking_mode = st.checkbox(
             "启用 DeepSeek 思考模式",
@@ -164,6 +174,24 @@ def display_mainline_analysis() -> None:
             help="high 是默认平衡选项，max 更慢且成本更高。",
         )
         st.session_state.mainline_reasoning_effort = reasoning_effort
+    with source_col:
+        skillhub_configured = bool(
+            getattr(config, "IWENCAI_API_KEY", "").strip()
+        ) and bool(getattr(config, "IWENCAI_SKILLHUB_ENABLED", True))
+        include_skillhub = st.checkbox(
+            "启用问财 SkillHub",
+            value=st.session_state.get(
+                "mainline_include_skillhub", skillhub_configured
+            ),
+            disabled=not skillhub_configured,
+            help=(
+                "调用新闻搜索、板块筛选和A股筛选三个技能；"
+                "失败时自动回退到原有数据源。"
+            ),
+        )
+        st.session_state.mainline_include_skillhub = include_skillhub
+        if not skillhub_configured:
+            st.caption("SkillHub 未启用或容器未读取到 IWENCAI_API_KEY")
 
     if st.button("开始分析", type="primary", width="stretch"):
         with st.spinner(
@@ -177,6 +205,7 @@ def display_mainline_analysis() -> None:
                 top_n=10,
                 include_ai=bool(config.DEEPSEEK_API_KEY.strip()),
                 include_newsapi=bool(config.NEWSAPI_API_KEY.strip()),
+                include_skillhub=include_skillhub,
                 thinking_mode=thinking_mode,
                 reasoning_effort=reasoning_effort,
                 history_dir=getattr(
@@ -202,6 +231,38 @@ def display_mainline_analysis() -> None:
         st.info(f"本月最强板块：{monthly[0].get('sector', '暂无')}")
     if result.get("thinking_mode"):
         st.caption(f"本次使用 DeepSeek 思考模式（{result.get('reasoning_effort', 'high')}）")
+
+    snapshot = result.get("snapshot", {}) or {}
+    source_status = snapshot.get("source_status", {}) or {}
+    skillhub_diagnostics = (
+        snapshot.get("source_diagnostics", {}).get("iwencai_skillhub", {}) or {}
+    )
+    if source_status.get("iwencai_skillhub"):
+        st.success("本次分析已使用问财 SkillHub 数据。")
+    elif include_skillhub:
+        st.warning("问财 SkillHub 本次未返回有效数据，已自动使用备用数据源。")
+    with st.expander("数据源状态", expanded=False):
+        st.json(
+            {
+                "source_status": source_status,
+                "source_diagnostics": snapshot.get("source_diagnostics", {}),
+                "processing_diagnostics": result.get("processing_diagnostics", {}),
+            }
+        )
+
+    if not weekly or not monthly:
+        source_diagnostics = snapshot.get("source_diagnostics", {}) or {}
+        st.error(
+            "主力资金候选池为空。请检查下方周/月接口返回条数、字段和 SkillHub 状态。"
+        )
+        st.json(
+            {
+                "weekly": source_diagnostics.get("pywencai_weekly", {}),
+                "monthly": source_diagnostics.get("pywencai_monthly", {}),
+                "skillhub": source_diagnostics.get("iwencai_skillhub", {}),
+                "processing": result.get("processing_diagnostics", {}),
+            }
+        )
 
     _render_sector_group("本周主力板块", weekly)
     st.divider()

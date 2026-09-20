@@ -16,6 +16,11 @@ services:
     environment:
       # 可以在这里设置环境变量，或者使用.env文件
       - TZ=Asia/Shanghai
+      - IWENCAI_BASE_URL=${IWENCAI_BASE_URL:-https://openapi.iwencai.com}
+      - IWENCAI_SKILLS_DIR=/app/skills
+      - IWENCAI_SKILLHUB_ENABLED=${IWENCAI_SKILLHUB_ENABLED:-true}
+      - IWENCAI_SKILL_TIMEOUT=${IWENCAI_SKILL_TIMEOUT:-45}
+      - IWENCAI_SKILL_LOG_RAW=${IWENCAI_SKILL_LOG_RAW:-false}
     restart: unless-stopped
     networks:
       - agentsstock-network

@@ -11,11 +11,19 @@ pywencai.get() 内部抛出 NoneType 异常的问题。
 💡 如遇选股失败，请在浏览器中登录 https://www.iwencai.com/screener
 """
 
-import sys
+import os
 import logging
+from importlib import import_module
 
 logger = logging.getLogger(__name__)
 _last_error = ""
+_COOKIE_ENV_NAMES = (
+    "IWENCAI_COOKIE",
+    "IWENCAI_SESSION_COOKIE",
+    "IWENCAI_COOKIES",
+    "PYWENCAI_COOKIE",
+    "WENCAI_COOKIE",
+)
 
 
 def get_last_error():
@@ -23,7 +31,7 @@ def get_last_error():
     return _last_error
 
 
-def safe_get(query, loop=True, **kwargs):
+def safe_get(query, loop=True, cookie=None, **kwargs):
     """
     安全调用 pywencai.get，捕获内部 NoneType 异常。
     
@@ -32,6 +40,7 @@ def safe_get(query, loop=True, **kwargs):
     Args:
         query: 问财查询语句
         loop: 是否翻页获取全部数据
+        cookie: 可选的问财 Cookie；未提供时读取环境变量
         **kwargs: 传递给 pywencai.get 的其它参数
         
     Returns:
@@ -40,11 +49,23 @@ def safe_get(query, loop=True, **kwargs):
     global _last_error
     _last_error = ""
 
+    configured_cookie = _normalize_cookie(cookie) or _get_configured_cookie()
+    if configured_cookie:
+        kwargs["cookie"] = configured_cookie
+
     # 尝试1: 直接调用（快速路径）
     result = _try_call(query, loop, **kwargs)
     if result is not None:
         _last_error = ""
         return result
+
+    if configured_cookie:
+        _last_error = (
+            f"问财返回空响应；已传入Cookie长度={len(configured_cookie)}，"
+            "请检查Cookie有效期、服务器出口IP和请求环境"
+        )
+        print(f"[pywencai] ❌ Cookie调用失败，暂不使用未登录浏览器重试")
+        return None
 
     print(f"[pywencai] ⚠️ 直接调用失败，尝试浏览器会话...")
 
@@ -80,11 +101,36 @@ def safe_get(query, loop=True, **kwargs):
     return None
 
 
+def _normalize_cookie(cookie):
+    """Normalize a manually copied Cookie request-header value."""
+    value = str(cookie or "").strip()
+    if value.lower().startswith("cookie:"):
+        value = value.split(":", 1)[1].strip()
+    return value
+
+
+def _get_configured_cookie():
+    """Read a Cookie from the environment for direct CLI usage."""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    except Exception:
+        pass
+
+    for name in _COOKIE_ENV_NAMES:
+        value = _normalize_cookie(os.getenv(name, ""))
+        if value:
+            return value
+    return ""
+
+
 def _try_call(query, loop=True, **kwargs):
     """内部调用 pywencai.get，捕获异常"""
     global _last_error
     import pywencai
     try:
+        _ensure_browser_headers()
         result = pywencai.get(query=query, loop=loop, **kwargs)
         return result
     except AttributeError as e:
@@ -97,6 +143,28 @@ def _try_call(query, loop=True, **kwargs):
         return None
 
 
+def _ensure_browser_headers():
+    """Extend pywencai's generated headers with browser origin metadata."""
+    try:
+        wencai_module = import_module("pywencai.wencai")
+        current_headers = wencai_module.headers
+        if getattr(current_headers, "_iwencai_browser_headers", False):
+            return
+
+        def browser_headers(cookie=None, user_agent=None):
+            request_headers = current_headers(cookie, user_agent)
+            request_headers.update({
+                "Referer": "https://www.iwencai.com/",
+                "Origin": "https://www.iwencai.com",
+            })
+            return request_headers
+
+        browser_headers._iwencai_browser_headers = True
+        wencai_module.headers = browser_headers
+    except (AttributeError, ImportError):
+        logger.debug("当前 pywencai 版本不支持扩展内部请求头")
+
+
 def _redact_error(error):
     """Keep diagnostics useful while avoiding accidental Cookie leakage."""
     message = f"{type(error).__name__}: {error}"
@@ -107,7 +175,7 @@ def _redact_error(error):
         "PYWENCAI_COOKIE",
         "WENCAI_COOKIE",
     ):
-        value = __import__("os").getenv(key, "").strip()
+        value = os.getenv(key, "").strip()
         if value:
             message = message.replace(value, "[REDACTED]")
     return message[:500]

@@ -10,3 +10,7 @@
 /.cursor
 /openspec
 TradEnv/
+/ask
+/tests
+/utils/__pycache__/
+/.venv-pywencai

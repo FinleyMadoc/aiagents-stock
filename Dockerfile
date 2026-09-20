@@ -61,6 +61,20 @@ RUN python -m playwright install --with-deps chromium
 # 复制项目文件
 COPY . .
 
+# SkillHub 技能随项目代码进入镜像；构建阶段提前校验，避免上线后才发现缺文件。
+RUN test -f /app/skills/news-search/scripts/news_search.py && \
+    test -f /app/skills/hithink-sector-selector/scripts/cli.py && \
+    test -f /app/skills/hithink-astock-selector/scripts/cli.py && \
+    python -m py_compile \
+        /app/utils/iwencai_skillhub.py \
+        /app/mainline_analysis.py \
+        /app/skills/news-search/scripts/news_search.py \
+        /app/skills/hithink-sector-selector/scripts/cli.py \
+        /app/skills/hithink-astock-selector/scripts/cli.py && \
+    if [ -f /app/test_iwencai_skill.py ]; then \
+        python -m py_compile /app/test_iwencai_skill.py; \
+    fi
+
 # 如果项目根目录下带了 UZI-Skill-main，则一并安装它的依赖
 RUN if [ -f /app/UZI-Skill-main/requirements.txt ]; then \
         pip install --no-cache-dir --default-timeout=1000 -r /app/UZI-Skill-main/requirements.txt && \

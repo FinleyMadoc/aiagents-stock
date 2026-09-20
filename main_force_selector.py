@@ -23,7 +23,8 @@ class MainForceStockSelector:
     
     def get_main_force_stocks(self, start_date: str = None, days_ago: int = None,
                              min_market_cap: float = None, max_market_cap: float = None,
-                             main_board_only: bool = False) -> Tuple[bool, pd.DataFrame, str]:
+                             main_board_only: bool = False,
+                             cookie: str = None) -> Tuple[bool, pd.DataFrame, str]:
         """
         获取主力资金净流入前100名股票
         
@@ -33,6 +34,7 @@ class MainForceStockSelector:
             min_market_cap: 最小市值限制
             max_market_cap: 最大市值限制
             main_board_only: 是否仅保留6/0开头主板股票
+            cookie: 可选的问财 Cookie，未提供时读取环境变量
            
         Returns:
             (success, dataframe, message)
@@ -75,7 +77,7 @@ class MainForceStockSelector:
                 print(f"查询语句: {query[:100]}...")
                 
                 try:
-                    result = safe_get(query=query, loop=True)
+                    result = safe_get(query=query, loop=True, cookie=cookie)
                     
                     if result is None:
                         print(f"  ⚠️ 方案{i}返回None，尝试下一个方案")
